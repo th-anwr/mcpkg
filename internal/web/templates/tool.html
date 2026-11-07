@@ -87,7 +87,7 @@
         <p>Machine-readable: <a href="/tool/{{$t.Slug}}/install.md">install.md</a> · <a href="/api/tools/{{$t.Slug}}/manifest.json">manifest.json</a></p>
       {{else}}<p class="empty">Install instructions appear when checks finish.</p>{{end}}
 
-    {{else}}
+    {{else if eq $tab "health"}}
       {{if $t.Score}}{{$s := $t.Score}}
       <section class="score-card">
         <div class="score-big {{gradeClass $s.Grade}}"><span class="g">{{$s.Grade}}</span><span class="n">{{$s.Total}}<small>/100</small></span></div>

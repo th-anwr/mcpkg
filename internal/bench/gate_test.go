@@ -293,6 +293,9 @@ func TestGate(t *testing.T) {
 		"gates":   gates,
 	}
 	b, _ := json.MarshalIndent(report, "", "  ")
+	if err := os.MkdirAll("bench", 0o755); err != nil {
+		t.Fatalf("mkdir bench: %v", err)
+	}
 	if err := os.WriteFile("bench/gate.json", b, 0o644); err != nil {
 		t.Fatalf("write gate report: %v", err)
 	}
