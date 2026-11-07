@@ -33,6 +33,7 @@ import (
 	"github.com/mcpkg/mcpkg/internal/finder"
 	"github.com/mcpkg/mcpkg/internal/httpx"
 	"github.com/mcpkg/mcpkg/internal/llm"
+	"github.com/mcpkg/mcpkg/internal/logx"
 	"github.com/mcpkg/mcpkg/internal/pipeline"
 	"github.com/mcpkg/mcpkg/internal/stages"
 	"github.com/mcpkg/mcpkg/internal/store"
@@ -111,11 +112,7 @@ Configuration comes from environment variables; see .env.example.
 `)
 }
 
-func newLogger(level string) *slog.Logger {
-	var l slog.Level
-	_ = l.UnmarshalText([]byte(level))
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l}))
-}
+func newLogger(level string) *slog.Logger { return logx.New(level, "mcpkg") }
 
 func open(ctx context.Context, cfg config.Config, log *slog.Logger) (*app.App, error) {
 	return app.Open(ctx, cfg, log)
