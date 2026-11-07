@@ -33,7 +33,7 @@ func New(level, name string) *slog.Logger {
 	if dir == "-" {
 		return slog.New(stderr)
 	}
-	f, err := Open(filepath.Join(dir, name+".log"), envInt("LOG_MAX_MB", 50)<<20, envInt("LOG_KEEP", 5))
+	f, err := Open(filepath.Join(dir, name+".log"), envInt("LOG_MAX_MB", 50)<<20, int(envInt("LOG_KEEP", 5)))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "logx: file logging disabled:", err)
 		return slog.New(stderr)
