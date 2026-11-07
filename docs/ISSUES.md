@@ -6,7 +6,7 @@ Date: 2026-11-07. Scope: what was found reviewing `pipeline.json`, `deploy/`, `c
 
 | # | Severity | Issue | Fix |
 |---|---|---|---|
-| 1 | **High** | `POST /admin/review/{id}` and `GET /admin/review` have no auth (`server.go` has zero auth references). Anyone can approve/reject queue items once deployed. | Short term: Caddy `basic_auth` on `/admin/*` with a bcrypt hash in `.env`. Proper: GitHub OAuth (section 3) + `ADMIN_GITHUB_LOGINS` allowlist. |
+| 1 | Low | `/admin/*` is behind HTTP Basic auth (`ADMIN_PASSWORD`, constant-time compare, same-origin CSRF guard; 403 when unset). Corrected from an earlier "no auth" claim. Remaining risk: one shared password, sent in clear until TLS is on. | Set `ADMIN_PASSWORD` via make-env.sh (already does), enable TLS first. Long term: GitHub OAuth + `ADMIN_GITHUB_LOGINS` (section 3). |
 | 2 | **High** | Docker images never built; AWS scripts only dry-run. First real run will hit surprises (apt mirrors, docker static tgz URL, osv-scanner download, arch on t4g = arm64). | Build locally first: `docker build -f deploy/Dockerfile .` and `sandbox/runner.Dockerfile`. Pin `DOCKER_CLI_VERSION` and osv-scanner version; use `TARGETARCH` build arg for arm64 vs amd64. |
 | 3 | Med | `LOG_DIR` default `logs/` in containers → `/app/logs`, ephemeral, and duplicates stderr that Docker already rotates (json-file 20m×3). | Set `LOG_DIR=-` in `.env` for compose, or add a named volume `logs:/logs` + `LOG_DIR=/logs`. Keep file logs for bare-metal/dev. |
 | 4 | Med | `worker-heavy` declares its own `volumes:`, which replaces any anchor-level volumes (YAML merge is shallow). | Any shared volume must be repeated in `worker-heavy`. |
@@ -150,3 +150,20 @@ Rule: cache every third-party response in Postgres with `fetched_at`; render fro
 4. Claims + owner edits.
 5. Benchmarks stage and tab.
 6. Code tab, Dependents, semantic search.
+
+## 7. Review round 2 (2026-11-07, evening)
+
+Added `.github/workflows/ci.yml` (gofmt, vet, build, unit tests, Postgres e2e, govulncheck, three Docker image builds) so the suite runs on GitHub. First run: https://github.com/th-anwr/mcpkg/actions/runs/42384515834
+
+| # | Severity | Issue | Fix |
+|---|---|---|---|
+| 13 | **High** | CI jobs were not started: "your account is locked due to a billing issue". Nothing has compiled since the logx change. | Fix billing at github.com/settings/billing, then re-run the workflow. Public repos get free Actions minutes once unlocked. |
+| 14 | Med | Logging exists only in `cmd/mcpkg`, `app`, `discover`, the pipeline runner. 27 of 44 non-test files use no slog: all five stages, sandbox (docker/process), httpx, queue, sources, mcpclient, store, submit. A stuck smoke test or a rate-limited crawler is invisible. | Propagate `internal/logx`: `stages.Deps.Log` already exists, use `deps.Log.With("stage", name, "tool", slug, "job", id)` in each stage. httpx: Debug per request (host, status, ms, attempt), Warn on rate limit. sandbox: Info on container start/stop (image, runtime, exit code, duration). queue: Info on lease, retry, dead-letter. Rule: an error is logged once, at the runner, with those attrs; stages log progress and external calls only. |
+| 15 | Med | `DATABASE_URL` default is `postgres:postgres@127.0.0.1` with `sslmode=disable`. Fine for dev; silent if `.env` loses the line. | In `config.Load`, refuse to start when `SITE_URL` is https and `DATABASE_URL` equals the default. |
+| 16 | Med | `bootstrap.sh` runs `curl get.docker.com | sh` and builds all images on the t4g.small (2 GB RAM + 2 GB swap). Go build + apt + osv-scanner download will be slow and may OOM. | Build in CI, push to GHCR, pull by tag on the box (section 2). Use the distro Docker package or pin the script version. |
+| 17 | Low | `ubuntu-latest` moved to Ubuntu 26 on 2026-10-19. | Pin `runs-on: ubuntu-24.04` in ci.yml. |
+| 18 | Low | CSP `img-src https:` lets README images load from any host (tracking pixels in READMEs). | Proxy README images or allow-list `raw.githubusercontent.com`, `img.shields.io`, registry CDNs. |
+| 19 | Low | `make-env.sh` writes helper vars `ADMIN_PASS`/`PG_PASS` next to the real ones. | Cosmetic; drop or comment them. |
+| 20 | Info | Good as is: `http.Server` has Read/Write/ReadHeader timeouts; security headers set; httpx has per-host rate limit, Retry-After, body caps; e2e tests skip without `TEST_DATABASE_URL`; admin has CSRF guard. | None. |
+
+**Suite status**: not run since the logx change. Blocked by issue 13.
