@@ -6,7 +6,9 @@ package llm
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/mcpkg/mcpkg/internal/httpx"
 )
@@ -18,6 +20,7 @@ type Client struct {
 	Model    string
 	JSONMode bool
 	HTTP     *httpx.Client
+	Log      *slog.Logger // optional: Debug per call, Warn on failure
 }
 
 // Message is one chat message.
@@ -63,11 +66,20 @@ func (c *Client) Chat(ctx context.Context, msgs []Message, maxTokens int) (strin
 		} `json:"choices"`
 		Usage Usage `json:"usage"`
 	}
+	start := time.Now()
 	if err := c.HTTP.PostJSON(ctx, strings.TrimRight(c.BaseURL, "/")+"/chat/completions", hdr, body, &res); err != nil {
+		if c.Log != nil {
+			c.Log.Warn("llm call failed", "model", c.Model, "ms", time.Since(start).Milliseconds(), "err", err)
+		}
 		return "", Usage{}, err
 	}
 	if len(res.Choices) == 0 {
 		return "", res.Usage, errors.New("llm returned no choices")
+	}
+	if c.Log != nil {
+		c.Log.Debug("llm call", "model", c.Model, "ms", time.Since(start).Milliseconds(),
+			"prompt_tokens", res.Usage.PromptTokens, "completion_tokens", res.Usage.CompletionTokens,
+			"finish_reason", res.Choices[0].FinishReason)
 	}
 	return res.Choices[0].Message.Content, res.Usage, nil
 }

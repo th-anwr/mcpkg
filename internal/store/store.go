@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -17,10 +18,20 @@ import (
 )
 
 // Store wraps the database.
-type Store struct{ DB *sql.DB }
+type Store struct {
+	DB  *sql.DB
+	Log *slog.Logger // optional: Warn on query failures
+}
 
 // New returns a Store.
 func New(db *sql.DB) *Store { return &Store{DB: db} }
+
+// warn logs one query error at the boundary; the caller keeps the error.
+func (s *Store) warn(op string, err error) {
+	if s.Log != nil && err != nil && !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, ErrNotFound) && !errors.Is(err, context.Canceled) {
+		s.Log.Warn("store query failed", "op", op, "err", err)
+	}
+}
 
 // ErrNotFound is returned when a tool does not exist.
 var ErrNotFound = errors.New("not found")
@@ -96,7 +107,9 @@ func nullTime(n sql.NullTime) *time.Time {
 
 // GetTool loads one tool by id.
 func (s *Store) GetTool(ctx context.Context, id int64) (*model.Tool, error) {
-	return scanTool(s.DB.QueryRowContext(ctx, `SELECT `+toolCols+` FROM tools WHERE id=$1`, id))
+	t, err := scanTool(s.DB.QueryRowContext(ctx, `SELECT `+toolCols+` FROM tools WHERE id=$1`, id))
+	s.warn("get_tool", err)
+	return t, err
 }
 
 // GetToolBySlug loads one tool by slug.
@@ -208,6 +221,7 @@ type StageRecord struct {
 func (s *Store) SaveStage(ctx context.Context, r StageRecord) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
+		s.warn("save_stage.begin", err)
 		return err
 	}
 	defer tx.Rollback()
@@ -228,9 +242,14 @@ func (s *Store) SaveStage(ctx context.Context, r StageRecord) error {
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO check_runs (tool_id, stage, decision, notes, result, duration_ms, worker)
 		VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)`, r.ToolID, r.Stage, r.Decision, pq.Array(notes), res, r.DurationMs, r.Worker); err != nil {
+		s.warn("save_stage.check_runs", err)
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		s.warn("save_stage.commit", err)
+		return err
+	}
+	return nil
 }
 
 // CheckRun is one row of the audit trail.
@@ -248,6 +267,7 @@ func (s *Store) CheckRuns(ctx context.Context, toolID int64, limit int) ([]Check
 	rows, err := s.DB.QueryContext(ctx, `SELECT stage, decision, notes, duration_ms, worker, created_at
 		FROM check_runs WHERE tool_id=$1 ORDER BY created_at DESC, id DESC LIMIT $2`, toolID, limit)
 	if err != nil {
+		s.warn("check_runs", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -271,6 +291,7 @@ func (s *Store) AddReview(ctx context.Context, toolID int64, reason string, deta
 	}
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO review_queue (tool_id, reason, details) VALUES ($1,$2,$3::jsonb)
 		ON CONFLICT (tool_id, reason) WHERE state='open' DO NOTHING`, toolID, reason, d)
+	s.warn("add_review", err)
 	return err
 }
 
@@ -463,6 +484,7 @@ func (s *Store) Search(ctx context.Context, p SearchParams) ([]*model.Tool, int,
 	cond := strings.Join(where, " AND ")
 	var total int
 	if err := s.DB.QueryRowContext(ctx, "SELECT count(*) FROM tools WHERE "+cond, args...).Scan(&total); err != nil {
+		s.warn("search.count", err)
 		return nil, 0, err
 	}
 	limit, offset := arg(p.Limit), arg(p.Offset)
@@ -535,6 +557,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		count(*) FILTER (WHERE verified_at IS NULL)
 		FROM tools`).Scan(&st.Total, &st.Listed, &st.Verified, &st.Works, &st.NeedsKey, &st.Broken, &st.Blocked, &st.Unmaintained, &st.Pending)
 	if err != nil {
+		s.warn("stats", err)
 		return st, err
 	}
 	st.BySource = map[string]int{}
@@ -606,6 +629,7 @@ func (s *Store) RecordSubmission(ctx context.Context, url, clientKey string, too
 	}
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO submissions (url, tool_id, state, error, client_key) VALUES ($1,$2,$3,$4,$5)`,
 		url, tid, state, errMsg, clientKey)
+	s.warn("record_submission", err)
 	return err
 }
 

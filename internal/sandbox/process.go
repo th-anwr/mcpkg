@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mcpkg/mcpkg/internal/identity"
 	"github.com/mcpkg/mcpkg/internal/launch"
@@ -19,10 +21,17 @@ import (
 // ProcessRunner runs servers directly on the host. DEVELOPMENT ONLY: no isolation.
 type ProcessRunner struct {
 	BaseDir string
+	Log     *slog.Logger // optional: install/start/cleanup lifecycle
 }
 
 // Name implements Runner.
 func (p *ProcessRunner) Name() string { return "process" }
+
+func (p *ProcessRunner) info(msg string, args ...any) {
+	if p.Log != nil {
+		p.Log.Info(msg, append([]any{"runtime", "process"}, args...)...)
+	}
+}
 
 func (p *ProcessRunner) dir(job Job) string {
 	return filepath.Join(p.BaseDir, "mcpkg-smoke-"+job.ID)
@@ -44,6 +53,7 @@ func (p *ProcessRunner) baseEnv(wd string) []string {
 // Install implements Runner.
 func (p *ProcessRunner) Install(ctx context.Context, job Job) (string, string, error) {
 	wd := p.dir(job)
+	start := time.Now()
 	for _, d := range []string{"app", "home", "tmp", "run"} {
 		if err := os.MkdirAll(filepath.Join(wd, d), 0o755); err != nil {
 			return "", "", fmt.Errorf("%w: %v", ErrInfra, err)
@@ -55,30 +65,37 @@ func (p *ProcessRunner) Install(ctx context.Context, job Job) (string, string, e
 		env = append(env, "npm_config_cache="+filepath.Join(wd, "npm-cache"), "npm_config_update_notifier=false", "npm_config_fund=false")
 		out, err := run(ctx, "npm", []string{"install", "--no-audit", "--no-fund", "--no-save", "--prefix", filepath.Join(wd, "app"), job.Spec()}, env, wd)
 		if err != nil {
+			p.info("sandbox install failed", "job", job.ID, "kind", job.Kind, "ms", time.Since(start).Milliseconds(), "err", err)
 			return "", out, fmt.Errorf("%w: npm install: %v", ErrInstall, err)
 		}
 		bins, err := npmBins(filepath.Join(wd, "app", "node_modules", job.Package, "package.json"), job.Package)
 		if err != nil || len(bins) == 0 {
 			return "", out, fmt.Errorf("%w: package declares no bin", ErrInstall)
 		}
-		return launch.PickBin(job.Package, bins, job.PreferBin, nil), out, nil
+		bin := launch.PickBin(job.Package, bins, job.PreferBin, nil)
+		p.info("sandbox install done", "job", job.ID, "kind", job.Kind, "bin", bin, "ms", time.Since(start).Milliseconds())
+		return bin, out, nil
 	case "pypi":
 		env = append(env, "UV_CACHE_DIR="+filepath.Join(wd, "uv-cache"), "UV_PYTHON_DOWNLOADS=never")
 		venv := filepath.Join(wd, "venv")
 		out, err := run(ctx, "uv", []string{"venv", "--quiet", venv}, env, wd)
 		if err != nil {
+			p.info("sandbox install failed", "job", job.ID, "kind", job.Kind, "ms", time.Since(start).Milliseconds(), "err", err)
 			return "", out, fmt.Errorf("%w: uv venv: %v", ErrInfra, err)
 		}
 		out2, err := run(ctx, "uv", []string{"pip", "install", "--quiet", "--python", filepath.Join(venv, "bin", "python"), job.Spec()}, env, wd)
 		out += out2
 		if err != nil {
+			p.info("sandbox install failed", "job", job.ID, "kind", job.Kind, "ms", time.Since(start).Milliseconds(), "err", err)
 			return "", out, fmt.Errorf("%w: pip install: %v", ErrInstall, err)
 		}
 		bins := pythonConsoleScripts(venv, job.Package)
 		if len(bins) == 0 {
 			return "", out, fmt.Errorf("%w: distribution declares no console script (library, not a runnable server?)", ErrInstall)
 		}
-		return launch.PickBin(job.Package, bins, job.PreferBin, job.EntryPoints), out, nil
+		bin := launch.PickBin(job.Package, bins, job.PreferBin, job.EntryPoints)
+		p.info("sandbox install done", "job", job.ID, "kind", job.Kind, "bin", bin, "ms", time.Since(start).Milliseconds())
+		return bin, out, nil
 	default:
 		return "", "", fmt.Errorf("%w: %s packages need the docker sandbox", ErrInstall, job.Kind)
 	}
@@ -114,6 +131,7 @@ func (p *ProcessRunner) Start(ctx context.Context, job Job, bin string) (*Proces
 		return nil, fmt.Errorf("start: %w", err)
 	}
 	pid := cmd.Process.Pid
+	p.info("sandbox start", "job", job.ID, "kind", job.Kind, "bin", filepath.Base(path), "pid", pid)
 	return &Process{
 		Stdin: stdin, Stdout: stdout, stderr: stderr, Display: display(filepath.Base(path), job.Args),
 		stop: func() { _ = syscall.Kill(-pid, syscall.SIGKILL) },
@@ -122,7 +140,10 @@ func (p *ProcessRunner) Start(ctx context.Context, job Job, bin string) (*Proces
 }
 
 // Cleanup implements Runner.
-func (p *ProcessRunner) Cleanup(job Job) { _ = os.RemoveAll(p.dir(job)) }
+func (p *ProcessRunner) Cleanup(job Job) {
+	p.info("sandbox cleanup", "job", job.ID)
+	_ = os.RemoveAll(p.dir(job))
+}
 
 func npmBins(pkgJSON, name string) ([]string, error) {
 	b, err := os.ReadFile(pkgJSON)

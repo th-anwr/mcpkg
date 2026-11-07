@@ -7,15 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Limits protect against zip bombs and huge packages.
 type Limits struct {
 	MaxFiles int
 	MaxBytes int64
+	Log      *slog.Logger // optional: Debug summary per extraction
 }
 
 // DefaultLimits are generous for MCP servers.
@@ -43,9 +46,13 @@ func ExtractTarGz(r io.Reader, dst string, lim Limits) error {
 	tr := tar.NewReader(gz)
 	var files int
 	var total int64
+	start := time.Now()
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
+			if lim.Log != nil {
+				lim.Log.Debug("extract done", "format", "tar.gz", "dst", dst, "files", files, "bytes", total, "ms", time.Since(start).Milliseconds())
+			}
 			return nil
 		}
 		if err != nil {
@@ -81,7 +88,11 @@ func ExtractZip(path, dst string, lim Limits) error {
 	}
 	defer zr.Close()
 	var total int64
+	start := time.Now()
 	if len(zr.File) > lim.MaxFiles {
+		if lim.Log != nil {
+			lim.Log.Warn("extract limit", "format", "zip", "path", path, "files", len(zr.File), "max", lim.MaxFiles)
+		}
 		return errLimit
 	}
 	for _, f := range zr.File {
@@ -111,6 +122,9 @@ func ExtractZip(path, dst string, lim Limits) error {
 		if err != nil {
 			return err
 		}
+	}
+	if lim.Log != nil {
+		lim.Log.Debug("extract done", "format", "zip", "dst", dst, "files", len(zr.File), "bytes", total, "ms", time.Since(start).Milliseconds())
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -16,6 +17,7 @@ type Crates struct {
 	API  string // https://crates.io
 	HTTP *httpx.Client
 	SDKs []string
+	Log  *slog.Logger // optional: crawl progress
 }
 
 // Name implements Source.
@@ -56,6 +58,10 @@ func (c *Crates) Crawl(ctx context.Context, opt Options, emit func(Candidate) er
 	}
 	seen := map[string]bool{}
 	emitted := 0
+	start := time.Now()
+	if c.Log != nil {
+		c.Log.Info("crawl start", "source", "crates", "sdks", len(sdks), "limit", opt.Limit)
+	}
 	for _, sdk := range sdks {
 		for page := 1; page <= 100; page++ {
 			var rd crateRevDeps
@@ -76,6 +82,9 @@ func (c *Crates) Crawl(ctx context.Context, opt Options, emit func(Candidate) er
 				seen[v.Crate] = true
 				var info crateInfo
 				if err := c.HTTP.GetJSON(ctx, fmt.Sprintf("%s/api/v1/crates/%s", c.API, url.PathEscape(v.Crate)), nil, &info); err != nil {
+					if c.Log != nil {
+						c.Log.Warn("crate fetch failed", "crate", v.Crate, "err", err)
+					}
 					continue
 				}
 				ver := info.Crate.MaxStable
@@ -109,6 +118,9 @@ func (c *Crates) Crawl(ctx context.Context, opt Options, emit func(Candidate) er
 				break
 			}
 		}
+	}
+	if c.Log != nil {
+		c.Log.Info("crawl done", "source", "crates", "emitted", emitted, "ms", time.Since(start).Milliseconds())
 	}
 	return "", nil
 }

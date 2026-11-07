@@ -8,9 +8,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/mcpkg/mcpkg/internal/config"
 	"github.com/mcpkg/mcpkg/internal/discover"
@@ -25,6 +27,7 @@ type Resolver struct {
 	Cfg  config.Config
 	HTTP *httpx.Client
 	Disc *discover.Discoverer
+	Log  *slog.Logger // optional
 }
 
 // ErrUnsupported is returned for links we cannot interpret.
@@ -136,17 +139,28 @@ func (r *Resolver) repoCandidate(ctx context.Context, repo identity.Repo) (sourc
 
 // Submit resolves and upserts a link, returning the tool id.
 func (r *Resolver) Submit(ctx context.Context, raw string) (discover.UpsertResult, sources.Candidate, error) {
+	start := time.Now()
 	c, err := r.Resolve(ctx, raw)
 	if err != nil {
+		if r.Log != nil {
+			r.Log.Warn("submit rejected", "url", raw, "err", err)
+		}
 		return discover.UpsertResult{}, c, err
 	}
 	res, err := r.Disc.Upsert(ctx, c)
 	if err != nil {
+		if r.Log != nil {
+			r.Log.Warn("submit upsert failed", "name", c.Name, "tool_id", res.ToolID, "err", err)
+		}
 		return res, c, err
 	}
 	if !res.Enqueued && !res.Created {
 		// Known tool: force a fresh check (authors expect submissions to re-verify).
 		_, _ = r.Disc.Queue.Enqueue(ctx, r.Disc.EntryStage, res.ToolID, zeroTime)
+	}
+	if r.Log != nil {
+		r.Log.Info("submit", "name", c.Name, "source", c.Source, "tool_id", res.ToolID,
+			"created", res.Created, "enqueued", res.Enqueued, "ms", time.Since(start).Milliseconds())
 	}
 	return res, c, nil
 }

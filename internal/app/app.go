@@ -55,7 +55,9 @@ func New(cfg config.Config, log *slog.Logger, conn *sql.DB, pipe pipeline.Config
 	q.Log = log.With("component", "queue")
 	h := httpx.New(cfg.UserAgent)
 	h.Log = log.With("component", "http")
-	return &App{Cfg: cfg, Log: log, DB: conn, Store: store.New(conn), Queue: q, HTTP: h, Pipe: pipe}
+	st := store.New(conn)
+	st.Log = log.With("component", "store")
+	return &App{Cfg: cfg, Log: log, DB: conn, Store: st, Queue: q, HTTP: h, Pipe: pipe}
 }
 
 // Discoverer returns the candidate merger.
@@ -65,7 +67,7 @@ func (a *App) Discoverer() *discover.Discoverer {
 
 // Resolver handles author submissions.
 func (a *App) Resolver() *submit.Resolver {
-	return &submit.Resolver{Cfg: a.Cfg, HTTP: a.HTTP, Disc: a.Discoverer()}
+	return &submit.Resolver{Cfg: a.Cfg, HTTP: a.HTTP, Disc: a.Discoverer(), Log: a.Log.With("component", "submit")}
 }
 
 // SandboxRunner builds the configured smoke-test sandbox (nil when disabled).
@@ -76,7 +78,7 @@ func (a *App) SandboxRunner() sandbox.Runner {
 			Proxy: a.Cfg.SandboxProxy, Memory: a.Cfg.SandboxMemory, CPUs: a.Cfg.SandboxCPUs, Log: a.Log.With("component", "sandbox")}
 	case "process":
 		a.Log.Warn("SANDBOX=process runs untrusted servers directly on this machine: use only for local development")
-		return &sandbox.ProcessRunner{BaseDir: a.Cfg.WorkDir}
+		return &sandbox.ProcessRunner{BaseDir: a.Cfg.WorkDir, Log: a.Log.With("component", "sandbox")}
 	}
 	return nil
 }
@@ -84,7 +86,8 @@ func (a *App) SandboxRunner() sandbox.Runner {
 // Runner builds the pipeline with every stage wired.
 func (a *App) Runner() *pipeline.Runner {
 	deps := &stages.Deps{Cfg: a.Cfg, HTTP: a.HTTP, Store: a.Store, Gates: a.Pipe.Gates, Pipe: a.Pipe, Log: a.Log}
-	model := &llm.Client{BaseURL: a.Cfg.LLMBaseURL, APIKey: a.Cfg.LLMAPIKey, Model: a.Cfg.LLMModel, JSONMode: a.Cfg.LLMJSONMode, HTTP: a.HTTP}
+	model := &llm.Client{BaseURL: a.Cfg.LLMBaseURL, APIKey: a.Cfg.LLMAPIKey, Model: a.Cfg.LLMModel, JSONMode: a.Cfg.LLMJSONMode, HTTP: a.HTTP,
+		Log: a.Log.With("component", "llm")}
 	st := map[string]pipeline.Stage{
 		"health":   &stages.Health{D: deps},
 		"security": &stages.Security{D: deps},
@@ -102,15 +105,15 @@ func (a *App) Sources(names []string) ([]sources.Source, error) {
 	for _, n := range names {
 		switch strings.TrimSpace(n) {
 		case "registry":
-			out = append(out, &sources.Registry{BaseURL: a.Cfg.RegistryURL, HTTP: a.HTTP})
+			out = append(out, &sources.Registry{BaseURL: a.Cfg.RegistryURL, HTTP: a.HTTP, Log: a.Log.With("component", "source")})
 		case "npm":
-			out = append(out, &sources.Npm{Registry: a.Cfg.NpmRegistry, HTTP: a.HTTP})
+			out = append(out, &sources.Npm{Registry: a.Cfg.NpmRegistry, HTTP: a.HTTP, Log: a.Log.With("component", "source")})
 		case "pypi":
-			out = append(out, &sources.PyPI{BaseURL: a.Cfg.PyPIURL, HTTP: a.HTTP})
+			out = append(out, &sources.PyPI{BaseURL: a.Cfg.PyPIURL, HTTP: a.HTTP, Log: a.Log.With("component", "source")})
 		case "crates":
-			out = append(out, &sources.Crates{API: a.Cfg.CratesAPI, HTTP: a.HTTP})
+			out = append(out, &sources.Crates{API: a.Cfg.CratesAPI, HTTP: a.HTTP, Log: a.Log.With("component", "source")})
 		case "github":
-			out = append(out, &sources.GitHub{API: a.Cfg.GitHubAPI, Token: a.Cfg.GitHubToken, HTTP: a.HTTP})
+			out = append(out, &sources.GitHub{API: a.Cfg.GitHubAPI, Token: a.Cfg.GitHubToken, HTTP: a.HTTP, Log: a.Log.With("component", "source")})
 		case "":
 		default:
 			return nil, fmt.Errorf("unknown source %q", n)

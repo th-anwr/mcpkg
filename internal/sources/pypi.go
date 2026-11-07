@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"sort"
@@ -24,6 +25,7 @@ type PyPI struct {
 	HTTP    *httpx.Client
 	// Names, when set, skips the simple-index scan (used by tests and `mcpkg add`).
 	Names []string
+	Log   *slog.Logger // optional: crawl progress
 }
 
 // Name implements Source.
@@ -137,6 +139,10 @@ func (p *PyPI) Crawl(ctx context.Context, opt Options, emit func(Candidate) erro
 	sinceSerial, _ := strconv.ParseInt(opt.Since, 10, 64)
 	names := p.Names
 	maxSerial := sinceSerial
+	start := time.Now()
+	if p.Log != nil {
+		p.Log.Info("crawl start", "source", "pypi", "since", opt.Since, "limit", opt.Limit)
+	}
 	if len(names) == 0 {
 		var err error
 		names, maxSerial, err = p.scanIndex(ctx, sinceSerial)
@@ -151,6 +157,9 @@ func (p *PyPI) Crawl(ctx context.Context, opt Options, emit func(Candidate) erro
 		}
 		proj, err := FetchPyPI(ctx, p.HTTP, p.BaseURL, name, "")
 		if err != nil {
+			if p.Log != nil {
+				p.Log.Warn("pypi fetch failed", "name", name, "err", err)
+			}
 			continue
 		}
 		norm := identity.PyPIName(proj.Info.Name)
@@ -185,6 +194,9 @@ func (p *PyPI) Crawl(ctx context.Context, opt Options, emit func(Candidate) erro
 	}
 	if len(p.Names) > 0 {
 		return opt.Since, nil
+	}
+	if p.Log != nil {
+		p.Log.Info("crawl done", "source", "pypi", "emitted", emitted, "cursor", maxSerial, "ms", time.Since(start).Milliseconds())
 	}
 	return fmt.Sprint(maxSerial), nil
 }

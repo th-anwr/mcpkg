@@ -69,7 +69,7 @@ func (s *Security) one(ctx context.Context, t *model.Tool) pipeline.Result {
 	sec.Scanned, sec.Target = art.kind, art.target
 	sec.InstallScripts, sec.EntryPoints = art.installScripts, art.entryPoints
 	if art.kind != "none" {
-		rep := scan.Dir(art.root, scan.Options{Subdir: art.subdir})
+		rep := scan.Dir(art.root, scan.Options{Subdir: art.subdir, Log: s.D.Log.With("component", "scan")})
 		sec.Files, sec.Findings, sec.Capabilities = rep.Files, rep.Findings, rep.Capabilities
 		sec.Scanners = append(sec.Scanners, "builtin")
 		for _, sc := range art.installScripts {
@@ -138,7 +138,9 @@ func (s *Security) fetch(ctx context.Context, t *model.Tool, dir string) (artifa
 			}
 			if err == nil {
 				root := filepath.Join(dir, "npm")
-				if err := scan.ExtractTarGz(bytes.NewReader(data), root, scan.DefaultLimits); err != nil {
+				lim := scan.DefaultLimits
+				lim.Log = s.D.Log.With("component", "scan")
+				if err := scan.ExtractTarGz(bytes.NewReader(data), root, lim); err != nil {
 					return artifact{}, fmt.Errorf("extract npm tarball: %w", err)
 				}
 				var scripts []string
@@ -214,17 +216,19 @@ func (s *Security) fetchPyPI(ctx context.Context, proj sources.PyPIProject, dir 
 			return artifact{}, false, err
 		}
 		root := filepath.Join(dir, "pypi")
+		lim := scan.DefaultLimits
+		lim.Log = s.D.Log.With("component", "scan")
 		switch {
 		case strings.HasSuffix(f.Filename, ".whl") || strings.HasSuffix(f.Filename, ".zip"):
 			tmp := filepath.Join(dir, f.Filename)
 			if err := os.WriteFile(tmp, data, 0o644); err != nil {
 				return artifact{}, false, err
 			}
-			if err := scan.ExtractZip(tmp, root, scan.DefaultLimits); err != nil {
+			if err := scan.ExtractZip(tmp, root, lim); err != nil {
 				return artifact{}, false, fmt.Errorf("extract wheel: %w", err)
 			}
 		case strings.HasSuffix(f.Filename, ".tar.gz") || strings.HasSuffix(f.Filename, ".tgz"):
-			if err := scan.ExtractTarGz(bytes.NewReader(data), root, scan.DefaultLimits); err != nil {
+			if err := scan.ExtractTarGz(bytes.NewReader(data), root, lim); err != nil {
 				return artifact{}, false, fmt.Errorf("extract sdist: %w", err)
 			}
 		default:

@@ -5,11 +5,13 @@ package scan
 import (
 	"bufio"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/mcpkg/mcpkg/internal/model"
@@ -70,6 +72,7 @@ type Options struct {
 	MaxFileSize int64
 	MaxFindings int
 	Subdir      string
+	Log         *slog.Logger // optional: Debug summary per scan
 }
 
 var skipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, "__pycache__": true, ".venv": true, "venv": true,
@@ -94,8 +97,12 @@ func Dir(root string, opt Options) Report {
 	}
 	var rep Report
 	caps := map[string]bool{}
+	start := time.Now()
 	_ = filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if opt.Log != nil {
+				opt.Log.Debug("scan walk error", "path", p, "err", err)
+			}
 			return nil
 		}
 		if d.IsDir() {
@@ -124,6 +131,10 @@ func Dir(root string, opt Options) Report {
 		rep.Capabilities = append(rep.Capabilities, c)
 	}
 	sort.Strings(rep.Capabilities)
+	if opt.Log != nil {
+		opt.Log.Debug("scan done", "root", root, "files", rep.Files, "findings", len(rep.Findings),
+			"capabilities", len(rep.Capabilities), "ms", time.Since(start).Milliseconds())
+	}
 	return rep
 }
 

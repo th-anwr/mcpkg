@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -70,7 +71,7 @@ type transport interface {
 }
 
 // Handshake runs the standard discovery sequence on a transport.
-func handshake(ctx context.Context, tr transport) (*Info, error) {
+func handshake(ctx context.Context, tr transport, log *slog.Logger) (*Info, error) {
 	start := time.Now()
 	raw, err := tr.call(ctx, "initialize", map[string]any{
 		"protocolVersion": LatestProtocol,
@@ -131,7 +132,16 @@ func handshake(ctx context.Context, tr transport) (*Info, error) {
 		}
 	}
 	info.StdoutPollution = tr.polluted()
-	return info, nil
+	if log != nil {
+		if err != nil {
+			log.Warn("mcp handshake failed", "err", err, "ms", time.Since(start).Milliseconds())
+		} else {
+			log.Info("mcp handshake", "protocol", info.ProtocolVersion, "server", info.ServerName,
+				"server_version", info.ServerVersion, "tools", len(info.Tools), "prompts", info.PromptsCount,
+				"resources", info.ResourcesCount, "polluted", info.StdoutPollution, "ms", time.Since(start).Milliseconds())
+		}
+	}
+	return info, err
 }
 
 func listAll(ctx context.Context, tr transport, method, key string) ([]json.RawMessage, error) {
@@ -176,11 +186,18 @@ type stdio struct {
 	mu     sync.Mutex
 	nextID int
 	dirty  bool
+	log    *slog.Logger
 }
 
 // HandshakeStdio talks newline-delimited JSON-RPC over a child's stdin/stdout.
 func HandshakeStdio(ctx context.Context, stdin io.Writer, stdout io.Reader) (*Info, error) {
-	s := &stdio{w: stdin, lines: make(chan []byte, 64), done: make(chan struct{})}
+	return HandshakeStdioLog(ctx, stdin, stdout, nil)
+}
+
+// HandshakeStdioLog is HandshakeStdio with an optional logger for handshake
+// progress and stdout pollution.
+func HandshakeStdioLog(ctx context.Context, stdin io.Writer, stdout io.Reader, log *slog.Logger) (*Info, error) {
+	s := &stdio{w: stdin, lines: make(chan []byte, 64), done: make(chan struct{}), log: log}
 	go func() {
 		defer close(s.lines)
 		sc := bufio.NewScanner(stdout)
@@ -195,7 +212,7 @@ func HandshakeStdio(ctx context.Context, stdin io.Writer, stdout io.Reader) (*In
 		}
 	}()
 	defer close(s.done)
-	return handshake(ctx, s)
+	return handshake(ctx, s, log)
 }
 
 func (s *stdio) polluted() bool { return s.dirty }
@@ -263,6 +280,9 @@ func (s *stdio) handle(line []byte, want string) (reply, bool) {
 	var m message
 	if !strings.HasPrefix(trimmed, "{") || json.Unmarshal([]byte(trimmed), &m) != nil || m.JSONRPC == "" {
 		s.dirty = true // logs printed to stdout break real clients
+		if s.log != nil {
+			s.log.Debug("non-JSON stdout line", "line", truncate(trimmed, 120))
+		}
 		return reply{}, false
 	}
 	if m.Method != "" {

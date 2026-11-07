@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -19,6 +20,7 @@ type GitHub struct {
 	HTTP   *httpx.Client
 	Topics []string
 	Start  time.Time
+	Log    *slog.Logger // optional: crawl progress
 }
 
 // Name implements Source.
@@ -64,6 +66,10 @@ func (g *GitHub) Crawl(ctx context.Context, opt Options, emit func(Candidate) er
 	end := time.Now().UTC()
 	seen := map[string]bool{}
 	emitted := 0
+	logStart := time.Now()
+	if g.Log != nil {
+		g.Log.Info("crawl start", "source", "github", "since", opt.Since, "limit", opt.Limit)
+	}
 	for _, topic := range topics {
 		windows := [][2]time.Time{{start, end}}
 		for len(windows) > 0 {
@@ -115,6 +121,9 @@ func (g *GitHub) Crawl(ctx context.Context, opt Options, emit func(Candidate) er
 				}
 			}
 		}
+	}
+	if g.Log != nil {
+		g.Log.Info("crawl done", "source", "github", "emitted", emitted, "cursor", end.Format(time.RFC3339), "ms", time.Since(logStart).Milliseconds())
 	}
 	return end.Format(time.RFC3339), nil
 }

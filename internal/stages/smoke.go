@@ -59,7 +59,8 @@ func (s *Smoke) one(ctx context.Context, t *model.Tool) pipeline.Result {
 		hctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		client := mcpclient.SafeHTTPClient(40*time.Second, s.AllowPrivate)
 		start := time.Now()
-		info, err := mcpclient.HandshakeHTTP(hctx, client, plan.Remote.URL, plan.Remote.Type, nil)
+		info, err := mcpclient.HandshakeHTTPLog(hctx, client, plan.Remote.URL, plan.Remote.Type, nil,
+			s.D.Log.With("component", "mcpclient", "tool", t.Slug))
 		cancel()
 		sm.StartupMs = time.Since(start).Milliseconds()
 		s.applyInfo(sm, info)
@@ -101,7 +102,8 @@ func (s *Smoke) one(ctx context.Context, t *model.Tool) pipeline.Result {
 		sm.Command = proc.Display
 		hctx, hcancel := context.WithTimeout(ctx, s.startTimeout())
 		start = time.Now()
-		info, herr := mcpclient.HandshakeStdio(hctx, proc.Stdin, proc.Stdout)
+		info, herr := mcpclient.HandshakeStdioLog(hctx, proc.Stdin, proc.Stdout,
+			s.D.Log.With("component", "mcpclient", "tool", t.Slug))
 		hcancel()
 		sm.StartupMs = time.Since(start).Milliseconds()
 		proc.Close()

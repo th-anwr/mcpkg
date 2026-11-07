@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -72,14 +73,19 @@ func IsPublicIP(ip net.IP) bool {
 // HandshakeHTTP probes a remote server: Streamable HTTP first, legacy SSE as fallback
 // (or directly when kind == "sse").
 func HandshakeHTTP(ctx context.Context, client *http.Client, endpoint, kind string, headers map[string]string) (*Info, error) {
+	return HandshakeHTTPLog(ctx, client, endpoint, kind, headers, nil)
+}
+
+// HandshakeHTTPLog is HandshakeHTTP with an optional logger for handshake progress.
+func HandshakeHTTPLog(ctx context.Context, client *http.Client, endpoint, kind string, headers map[string]string, log *slog.Logger) (*Info, error) {
 	if kind == "sse" {
-		return handshakeSSE(ctx, client, endpoint, headers)
+		return handshakeSSE(ctx, client, endpoint, headers, log)
 	}
-	h := &streamable{client: client, url: endpoint, headers: headers}
-	info, err := handshake(ctx, h)
+	h := &streamable{client: client, url: endpoint, headers: headers, log: log}
+	info, err := handshake(ctx, h, log)
 	var se *statusError
 	if err != nil && errors.As(err, &se) && (se.code == 404 || se.code == 405 || se.code == 400) && h.session == "" {
-		if info2, err2 := handshakeSSE(ctx, client, endpoint, headers); err2 == nil {
+		if info2, err2 := handshakeSSE(ctx, client, endpoint, headers, log); err2 == nil {
 			return info2, nil
 		}
 	}
@@ -102,6 +108,7 @@ type streamable struct {
 	session  string
 	protocol string
 	nextID   int
+	log      *slog.Logger
 }
 
 func (s *streamable) polluted() bool { return false }
@@ -159,6 +166,9 @@ func (s *streamable) notify(ctx context.Context, method string, params any) erro
 func (s *streamable) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	s.nextID++
 	id := fmt.Sprint(s.nextID)
+	if s.log != nil {
+		s.log.Debug("mcp rpc", "transport", "streamable-http", "method", method)
+	}
 	m := map[string]any{"jsonrpc": "2.0", "id": s.nextID, "method": method}
 	if params != nil {
 		m["params"] = params
@@ -257,9 +267,10 @@ type sseTransport struct {
 	events  chan message
 	mu      sync.Mutex
 	nextID  int
+	log     *slog.Logger
 }
 
-func handshakeSSE(ctx context.Context, client *http.Client, endpoint string, headers map[string]string) (*Info, error) {
+func handshakeSSE(ctx context.Context, client *http.Client, endpoint string, headers map[string]string, log *slog.Logger) (*Info, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -282,7 +293,7 @@ func handshakeSSE(ctx context.Context, client *http.Client, endpoint string, hea
 	if resp.StatusCode >= 400 {
 		return nil, &statusError{code: resp.StatusCode}
 	}
-	t := &sseTransport{client: client, headers: headers, events: make(chan message, 32)}
+	t := &sseTransport{client: client, headers: headers, events: make(chan message, 32), log: log}
 	endpointCh := make(chan string, 1)
 	go func() {
 		defer close(t.events)
@@ -316,7 +327,7 @@ func handshakeSSE(ctx context.Context, client *http.Client, endpoint string, hea
 		}
 		t.post = base.ResolveReference(ref).String()
 	}
-	return handshake(ctx, t)
+	return handshake(ctx, t, log)
 }
 
 func (t *sseTransport) polluted() bool { return false }

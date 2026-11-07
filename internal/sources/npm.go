@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
@@ -18,6 +19,7 @@ type Npm struct {
 	Registry string // https://registry.npmjs.org
 	HTTP     *httpx.Client
 	Queries  []string
+	Log      *slog.Logger // optional: crawl progress
 }
 
 // Name implements Source.
@@ -151,6 +153,10 @@ func (n *Npm) Crawl(ctx context.Context, opt Options, emit func(Candidate) error
 	}
 	seen := map[string]bool{}
 	emitted := 0
+	start := time.Now()
+	if n.Log != nil {
+		n.Log.Info("crawl start", "source", "npm", "queries", len(queries), "limit", opt.Limit)
+	}
 	for _, text := range queries {
 		for from := 0; from < 5000; from += 250 {
 			var res npmSearch
@@ -169,6 +175,9 @@ func (n *Npm) Crawl(ctx context.Context, opt Options, emit func(Candidate) error
 				seen[p.Name] = true
 				doc, err := FetchNpmLatest(ctx, n.HTTP, n.Registry, p.Name)
 				if err != nil {
+					if n.Log != nil {
+						n.Log.Warn("npm fetch failed", "name", p.Name, "err", err)
+					}
 					continue
 				}
 				dep := doc.MCPDep()
@@ -211,6 +220,9 @@ func (n *Npm) Crawl(ctx context.Context, opt Options, emit func(Candidate) error
 				break
 			}
 		}
+	}
+	if n.Log != nil {
+		n.Log.Info("crawl done", "source", "npm", "emitted", emitted, "seen", len(seen), "ms", time.Since(start).Milliseconds())
 	}
 	return "", nil
 }

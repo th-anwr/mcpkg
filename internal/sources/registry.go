@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -17,6 +18,7 @@ type Registry struct {
 	BaseURL  string
 	HTTP     *httpx.Client
 	PageSize int
+	Log      *slog.Logger // optional: crawl progress
 }
 
 // Name implements Source.
@@ -90,9 +92,13 @@ func (r *Registry) Crawl(ctx context.Context, opt Options, emit func(Candidate) 
 	if pageSize <= 0 {
 		pageSize = 100
 	}
+	start := time.Now()
 	newest := opt.Since
 	cursor := ""
 	emitted := 0
+	if r.Log != nil {
+		r.Log.Info("crawl start", "source", "registry", "since", opt.Since, "limit", opt.Limit)
+	}
 	for {
 		q := url.Values{}
 		q.Set("limit", fmt.Sprint(pageSize))
@@ -147,6 +153,9 @@ func (r *Registry) Crawl(ctx context.Context, opt Options, emit func(Candidate) 
 			}
 		}
 		if page.Metadata.NextCursor == "" || len(page.Servers) == 0 {
+			if r.Log != nil {
+				r.Log.Info("crawl done", "source", "registry", "emitted", emitted, "cursor", newest, "ms", time.Since(start).Milliseconds())
+			}
 			return newest, nil
 		}
 		cursor = page.Metadata.NextCursor
