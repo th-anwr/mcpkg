@@ -1,6 +1,8 @@
 package web
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -45,5 +47,26 @@ func TestSchemaParams(t *testing.T) {
 	ps := schemaParams([]byte(`{"type":"object","properties":{"b":{"type":"string"},"a":{"type":["number","null"],"description":"A"}},"required":["b"]}`))
 	if len(ps) != 2 || ps[0].Name != "b" || !ps[0].Required || ps[1].Type != "number | null" {
 		t.Errorf("params = %+v", ps)
+	}
+}
+
+// TestSecurityHeaders guards the CSP against string-literal mistakes: the
+// image allowlist must be concatenated in, not quoted as source text.
+func TestSecurityHeaders(t *testing.T) {
+	s := &Server{}
+	h := s.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	csp := rec.Header().Get("Content-Security-Policy")
+	for _, want := range []string{"img-src 'self' data: https://raw.githubusercontent.com", "https://img.shields.io", "script-src 'self'", "frame-ancestors 'none'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP missing %q:\n%s", want, csp)
+		}
+	}
+	if strings.ContainsAny(csp, "`+") {
+		t.Errorf("CSP contains Go source text: %s", csp)
+	}
+	if rec.Header().Get("X-Frame-Options") != "DENY" {
+		t.Error("X-Frame-Options missing")
 	}
 }
