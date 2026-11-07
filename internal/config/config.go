@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -59,7 +60,7 @@ type Config struct {
 // Load reads the environment.
 func Load() Config {
 	c := Config{
-		DatabaseURL:   env("DATABASE_URL", "postgres://postgres:postgres@127.0.0.1:5432/mcpkg?sslmode=disable"),
+		DatabaseURL:   env("DATABASE_URL", DefaultDatabaseURL),
 		SiteName:      env("SITE_NAME", "mcpkg"),
 		SiteURL:       strings.TrimRight(env("SITE_URL", "http://localhost:8080"), "/"),
 		MetaNamespace: env("META_NAMESPACE", "dev.mcpkg"),
@@ -104,6 +105,18 @@ func Load() Config {
 	}
 	c.UserAgent = env("USER_AGENT", c.SiteName+"-indexer/0.1 ("+contact+")")
 	return c
+}
+
+// DefaultDatabaseURL is the local-development database. Production must set its own.
+const DefaultDatabaseURL = "postgres://postgres:postgres@127.0.0.1:5432/mcpkg?sslmode=disable"
+
+// Validate rejects configurations that only make sense in development but
+// look like production (an https SITE_URL).
+func (c Config) Validate() error {
+	if strings.HasPrefix(c.SiteURL, "https://") && c.DatabaseURL == DefaultDatabaseURL {
+		return errors.New("SITE_URL is https but DATABASE_URL is the development default: set DATABASE_URL in .env")
+	}
+	return nil
 }
 
 func env(key, def string) string {

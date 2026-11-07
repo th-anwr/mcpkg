@@ -56,7 +56,11 @@ It prints the IP.
 ./deploy/aws/push.sh core
 ```
 
-This copies the code and `.env`, installs Docker, builds the images and starts the database, website, scheduler and light worker.
+This copies the code and `.env`, installs Docker (pinned, `DOCKER_VERSION=28.5`), builds the images and starts the database, website, scheduler and light worker.
+
+- **Faster, no OOM risk:** push a tag (`git tag v0.1.0 && git push origin v0.1.0`). The `release` workflow builds the images for amd64 + arm64 and pushes them to GHCR. Put the three image lines from the run summary (`MCPKG_IMAGE`, `MCPKG_PROXY_IMAGE`, `SANDBOX_IMAGE`) in `.env`, make the packages public on GitHub (or `docker login ghcr.io` on each box), then run `push.sh`. It pulls instead of building.
+- **Postgres for workers:** `bootstrap.sh` sets `DB_BIND` to the core box's private IP. The `mcpkg` security group allows 5432 only from other `mcpkg` boxes, so the database is never public.
+- **Admin password:** `/admin/*` uses HTTP Basic auth. Until a domain with HTTPS is set up, the password is sent in clear text, so avoid using it on untrusted networks.
 
 **Checkpoint:** open `http://<core-ip>` in a browser and confirm the home page loads. Or run `curl -fsS http://<core-ip>/healthz`, which should print `ok`.
 

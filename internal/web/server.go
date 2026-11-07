@@ -99,6 +99,17 @@ func (s *Server) Handler() http.Handler {
 	return s.middleware(mux)
 }
 
+// imgHosts are the only hosts README images may load from (no tracking pixels
+// from arbitrary servers). Images elsewhere show their alt text.
+const imgHosts = "https://raw.githubusercontent.com https://*.githubusercontent.com https://github.com " +
+	"https://img.shields.io https://badge.fury.io https://badgen.net https://codecov.io https://user-images.githubusercontent.com"
+
+// Submission caps: per client and for the whole site, per hour.
+const (
+	submitPerClientHour = 10
+	submitGlobalHour    = 300
+)
+
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -106,7 +117,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: `+imgHosts+`; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/v0.1/") || r.URL.Path == "/llms.txt" || strings.HasSuffix(r.URL.Path, "/install.md") {
 			h.Set("Access-Control-Allow-Origin", "*")
 		}
@@ -436,10 +447,13 @@ func (s *Server) submitForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "submit", d)
 }
 
+// clientKey identifies a submitter for rate limiting. Behind Caddy the last
+// X-Forwarded-For entry is the address Caddy saw; earlier entries are
+// client-supplied and can be forged, so they are ignored.
 func clientKey(r *http.Request) string {
 	ip := r.Header.Get("X-Forwarded-For")
-	if i := strings.Index(ip, ","); i >= 0 {
-		ip = ip[:i]
+	if i := strings.LastIndex(ip, ","); i >= 0 {
+		ip = ip[i+1:]
 	}
 	if ip == "" {
 		ip, _, _ = net.SplitHostPort(r.RemoteAddr)
@@ -451,6 +465,7 @@ func clientKey(r *http.Request) string {
 func (s *Server) submitPost(w http.ResponseWriter, r *http.Request) {
 	d := s.base("Add your MCP server", "")
 	d.Nav = "submit"
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	if err := r.ParseForm(); err != nil {
 		d.Error = "Could not read the form."
 		s.render(w, "submit", d)
@@ -459,8 +474,21 @@ func (s *Server) submitPost(w http.ResponseWriter, r *http.Request) {
 	link := strings.TrimSpace(r.PostFormValue("url"))
 	d.Form = link
 	key := clientKey(r)
-	if n, err := s.Store.RecentSubmissions(r.Context(), key); err == nil && n >= 10 {
+	if n, err := s.Store.RecentSubmissions(r.Context(), key); err == nil && n >= submitPerClientHour {
 		d.Error, d.Status = "Too many submissions from your network in the last hour. Please try again later.", http.StatusTooManyRequests
+		s.render(w, "submit", d)
+		return
+	}
+	if n, err := s.Store.SubmissionsLastHour(r.Context()); err == nil && n >= submitGlobalHour {
+		if s.Log != nil {
+			s.Log.Warn("global submission cap reached", "last_hour", n)
+		}
+		d.Error, d.Status = "We are receiving a lot of submissions right now. Please try again in an hour.", http.StatusTooManyRequests
+		s.render(w, "submit", d)
+		return
+	}
+	if len(link) > 500 {
+		d.Error = "That link is too long."
 		s.render(w, "submit", d)
 		return
 	}

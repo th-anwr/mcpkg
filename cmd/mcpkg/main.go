@@ -48,6 +48,10 @@ func main() {
 		os.Exit(2)
 	}
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintln(os.Stderr, "mcpkg: config:", err)
+		os.Exit(2)
+	}
 	log := newLogger(cfg.LogLevel)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -11,12 +11,18 @@
 #   docker build -f sandbox/runner.Dockerfile -t mcpkg-runner:latest sandbox
 name: mcpkg
 
+# Images: built locally by default; set MCPKG_IMAGE=ghcr.io/<owner>/mcpkg:vX.Y.Z (and
+# MCPKG_PROXY_IMAGE) in .env to run tagged images from the release workflow instead.
 x-app: &app
-  image: mcpkg:latest
+  image: ${MCPKG_IMAGE:-mcpkg:latest}
   build:
     context: ..
     dockerfile: deploy/Dockerfile
   env_file: ../.env
+  # Docker already keeps and rotates stderr (below), so no log files inside containers.
+  # Services that set their own `environment:` must merge *env: YAML merges are shallow.
+  environment: &env
+    LOG_DIR: "-"
   restart: unless-stopped
   logging:
     driver: json-file
@@ -68,6 +74,7 @@ services:
     <<: *app
     command: ["worker", "-stages", "health,enrich,render"]
     environment:
+      <<: *env
       WORKER_ID: core-light
     depends_on:
       migrate: { condition: service_completed_successfully }
@@ -76,16 +83,21 @@ services:
     <<: *app
     profiles: ["heavy"]
     command: ["worker", "-stages", "security,smoke"]
+    # Root inside the container: it drives the host Docker daemon (root-equivalent anyway).
+    # Run it only on throwaway spot workers. Other services run as the image's uid 10001.
+    user: root
     environment:
+      <<: *env
       SANDBOX: docker
       WORKER_ID: ${WORKER_ID:-heavy-1}
+    # Replaces (does not extend) any volumes from the x-app anchor: repeat shared ones here.
     volumes:
       # The worker starts throwaway sandbox containers through the host daemon.
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [default]
 
   egress-proxy:
-    image: mcpkg-egress-proxy:latest
+    image: ${MCPKG_PROXY_IMAGE:-mcpkg-egress-proxy:latest}
     build:
       context: ../sandbox
       dockerfile: proxy.Dockerfile
@@ -100,7 +112,7 @@ services:
     image: caddy:2.8-alpine
     ports: ["80:80", "443:443"]
     environment:
-      DOMAIN: ${DOMAIN:-localhost}
+      DOMAIN: ${DOMAIN:-:80}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

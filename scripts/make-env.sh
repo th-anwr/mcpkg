@@ -76,6 +76,7 @@ SANDBOX_PROXY=http://egress-proxy:3128
 SANDBOX_MEMORY=1g
 SANDBOX_CPUS=1
 LOG_LEVEL=info
+LOG_DIR=-
 EOF
 echo "wrote .env (admin login for /admin/review: any username, password: $ADMIN_PASS)"
 [ -n "$GITHUB_TOKEN" ] || echo "warning: no GITHUB_TOKEN: health checks fall back to 60 requests/hour. Add it to .env before pushing." >&2

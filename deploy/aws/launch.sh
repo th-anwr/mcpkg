@@ -51,7 +51,7 @@ USER_DATA=$(cat <<EOF
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y && apt-get install -y git curl ca-certificates
-curl -fsSL https://get.docker.com | sh
+curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && { sh /tmp/get-docker.sh --version "${DOCKER_VERSION:-28.5}" || sh /tmp/get-docker.sh; }
 $FETCH
 EOF
 )

@@ -609,6 +609,13 @@ func (s *Store) RecordSubmission(ctx context.Context, url, clientKey string, too
 	return err
 }
 
+// SubmissionsLastHour counts all submissions in the last hour (global abuse cap).
+func (s *Store) SubmissionsLastHour(ctx context.Context) (int, error) {
+	var n int
+	err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM submissions WHERE created_at > now() - interval '1 hour'`).Scan(&n)
+	return n, err
+}
+
 // RecentSubmissions counts submissions from a client in the last hour (rate limiting).
 func (s *Store) RecentSubmissions(ctx context.Context, clientKey string) (int, error) {
 	var n int

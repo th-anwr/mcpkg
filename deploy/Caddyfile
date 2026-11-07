@@ -1,10 +1,10 @@
 {$DOMAIN} {
 	encode zstd gzip
 	reverse_proxy web:8080
-	header {
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		-Server
-	}
+	header -Server
+	# HSTS only on HTTPS responses: on a bare IP / DOMAIN=:80 there is no TLS yet.
+	@https protocol https
+	header @https Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	log {
 		output stdout
 		format console
