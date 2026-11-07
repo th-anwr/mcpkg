@@ -1,5 +1,6 @@
 bin/
 backups/
+logs/
 .env
 *.test
 /tmp/
