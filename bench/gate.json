@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-07T19:44:22Z",
+  "at": "2026-11-07T19:53:48Z",
   "fixture": "12 known-answer tools, fake scorecard/osv/mcp upstreams",
   "gates": [
     {
@@ -33,6 +33,6 @@
       "threshold": "Continue only, no fields, no review; 36 rows after two saves"
     }
   ],
-  "sha": "f565958826f42ef39d4ac62948b6e33784fec3d8",
+  "sha": "5cbfd1af76bec73fcd0832c048920c857cbb16b9",
   "tier": 1
 }
