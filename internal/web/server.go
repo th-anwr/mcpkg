@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	ttemplate "text/template"
@@ -521,22 +522,37 @@ func (s *Server) submitPost(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "submit", d)
 }
 
+// sameOrigin reports whether a POST comes from this site: the Origin header
+// (or, without it, the Referer) must name exactly this host. A substring test
+// would accept https://example.com.attacker.net; a request with neither
+// header is refused, since browsers send Origin on every form POST.
+func sameOrigin(r *http.Request) bool {
+	src := r.Header.Get("Origin")
+	if src == "" || src == "null" {
+		src = r.Header.Get("Referer")
+	}
+	if src == "" {
+		return false
+	}
+	u, err := url.Parse(src)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
+}
+
 func (s *Server) adminOnly(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.Cfg.AdminPassword == "" {
 			http.Error(w, "admin disabled (set ADMIN_PASSWORD)", http.StatusForbidden)
 			return
 		}
-		// CSRF guard for state-changing admin requests: same-origin only.
-		if r.Method == http.MethodPost {
-			origin := r.Header.Get("Origin")
-			if origin == "" {
-				origin = r.Header.Get("Referer")
-			}
-			if origin != "" && !strings.Contains(origin, "://"+r.Host) {
-				http.Error(w, "cross-site request refused", http.StatusForbidden)
-				return
-			}
+		// CSRF guard for state-changing admin requests: same-origin only. The
+		// browser re-sends Basic auth on cross-site requests, so this is the only
+		// thing stopping another site from posting review decisions.
+		if r.Method == http.MethodPost && !sameOrigin(r) {
+			http.Error(w, "cross-site request refused", http.StatusForbidden)
+			return
 		}
 		_, pass, ok := r.BasicAuth()
 		if !ok || subtle.ConstantTimeCompare([]byte(pass), []byte(s.Cfg.AdminPassword)) != 1 {

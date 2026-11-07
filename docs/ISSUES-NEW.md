@@ -67,3 +67,22 @@ stay in `docs/ISSUES.md`.
 - Suggested for the Opus pass: run a drift diff between `docs/ARCHITECTURE.md` and
   the code, re-verify N1's fix with a negative test, and decide the Semgrep
   license question (N8) before public launch.
+
+## 4. Status after the Opus pass (2026-11-08)
+
+Each finding was checked against the code before any change. The negative tests fail on the old code.
+
+| # | Verdict | Change |
+|---|---|---|
+| N1 | **Confirmed** (High) | `sameOrigin()` parses Origin (Referer as fallback) and requires its host to equal `r.Host` exactly. POSTs with neither header are refused. `TestAdminCSRF`: suffix attacker, other site, other port, missing headers, `null` origin. Against the old guard it lets the attacker cases through (204). |
+| N2 | Partly | `umask 077` already made a new `.env` mode 600, but an existing `.env` kept its old mode on re-run. `make-env.sh` now runs `chmod 600 .env`. Printing the admin password is intended (it is shown once so you can save it). |
+| N3 | Confirmed (Medium) | `Queue.Cleanup` also deletes dead jobs older than `queue.DeadTTL` (30 days). Recent dead jobs stay for `status.sh`. Covered by `TestCleanupAgesOutDeadJobs`. |
+| N4 | **Not an issue** | The `identities` primary key is `(kind, value)`. `UPDATE identities SET tool_id=…` never changes key columns, so it cannot conflict. |
+| N5 | **Not an issue** | `Slugify` and `ServerKey` first replace everything outside `[a-z0-9.-]` / `[a-z0-9-]`, so the string is ASCII before it is truncated. |
+| N6 | Fixed earlier | `rawJSON` no longer cuts output; oversized output becomes a `{"truncated":true}` marker (ISSUES #38). |
+| N7 | Not an issue | Stopped/blocked tools never reach `render` (`Stop` has no next stage). `SkipHeavy` covers archived or inactive repos, which are not blocked. `verified_at` means "last full check", and the page labels it "Checked N ago". |
+| N8 | Open (pre-launch) | Semgrep is only installed with `--build-arg WITH_SEMGREP=true` (default false), so the default image has none. Resolve the license question before enabling it. |
+| N9 | Done | DEPLOY.md "Before you start" step 5 makes the three GHCR packages public. |
+| N10 | Accepted | Verified: `web` has no `ports:`. |
+
+**Correction to "Verified OK" above:** the gate no longer commits a report or matches it against `GATE_SHA`. `push.sh` now requires green `go`, `docker` and `bench-gate` check runs on GitHub, plus a clean checkout at that commit (ISSUES #29, #31).

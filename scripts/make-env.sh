@@ -78,5 +78,6 @@ SANDBOX_CPUS=1
 LOG_LEVEL=info
 LOG_DIR=-
 EOF
+chmod 600 .env  # umask covers a new file; an existing .env keeps its old mode
 echo "wrote .env (admin login for /admin/review: any username, password: $ADMIN_PASS)"
 [ -n "$GITHUB_TOKEN" ] || echo "warning: no GITHUB_TOKEN: health checks fall back to 60 requests/hour. Add it to .env before pushing." >&2

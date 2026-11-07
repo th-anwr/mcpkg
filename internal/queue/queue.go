@@ -165,9 +165,16 @@ func (q *Queue) ReapExpired(ctx context.Context) (int64, error) {
 	return res.RowsAffected()
 }
 
-// Cleanup deletes finished jobs older than the given age.
+// DeadTTL is how long dead jobs stay for inspection (status.sh, last_error).
+// The scheduler's stale re-check enqueues those tools again anyway.
+const DeadTTL = 30 * 24 * time.Hour
+
+// Cleanup deletes finished jobs older than the given age and dead jobs older
+// than DeadTTL, so the jobs table does not grow without bound.
 func (q *Queue) Cleanup(ctx context.Context, olderThan time.Duration) (int64, error) {
-	res, err := q.DB.ExecContext(ctx, `DELETE FROM jobs WHERE state='done' AND updated_at < now() - make_interval(secs => $1)`, olderThan.Seconds())
+	res, err := q.DB.ExecContext(ctx, `DELETE FROM jobs
+		WHERE (state='done' AND updated_at < now() - make_interval(secs => $1))
+		   OR (state='dead' AND updated_at < now() - make_interval(secs => $2))`, olderThan.Seconds(), DeadTTL.Seconds())
 	if err != nil {
 		return 0, err
 	}

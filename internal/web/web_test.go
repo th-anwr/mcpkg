@@ -112,3 +112,44 @@ func TestBenchmarksTab(t *testing.T) {
 		t.Errorf("api shape: %s", out.String())
 	}
 }
+
+// TestAdminCSRF: admin POSTs must come from exactly this host (ISSUES-NEW N1).
+func TestAdminCSRF(t *testing.T) {
+	s := &Server{Cfg: config.Config{AdminPassword: "pw"}}
+	h := s.adminOnly(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	cases := []struct {
+		name, origin, referer string
+		want                  int
+	}{
+		{"same origin", "https://mcpkg.dev", "", http.StatusNoContent},
+		{"same origin, referer only", "", "https://mcpkg.dev/admin/review", http.StatusNoContent},
+		{"suffix attacker", "https://mcpkg.dev.attacker.net", "", http.StatusForbidden},
+		{"other site", "https://attacker.net", "", http.StatusForbidden},
+		{"no origin or referer", "", "", http.StatusForbidden},
+		{"null origin, attacker referer", "null", "https://attacker.net/x", http.StatusForbidden},
+		{"other port", "https://mcpkg.dev:8443", "", http.StatusForbidden},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodPost, "https://mcpkg.dev/admin/review", nil)
+		req.SetBasicAuth("admin", "pw")
+		if c.origin != "" {
+			req.Header.Set("Origin", c.origin)
+		}
+		if c.referer != "" {
+			req.Header.Set("Referer", c.referer)
+		}
+		rec := httptest.NewRecorder()
+		h(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("%s: status %d, want %d", c.name, rec.Code, c.want)
+		}
+	}
+	// GET pages stay reachable without Origin (plain navigation).
+	req := httptest.NewRequest(http.MethodGet, "https://mcpkg.dev/admin/review", nil)
+	req.SetBasicAuth("admin", "pw")
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("GET: status %d", rec.Code)
+	}
+}

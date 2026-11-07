@@ -251,3 +251,46 @@ func TestSelectStaleIDs(t *testing.T) {
 		}
 	}
 }
+
+// TestCleanupAgesOutDeadJobs: done jobs go after the given age, dead jobs after
+// queue.DeadTTL, and recent dead jobs stay for inspection (ISSUES-NEW N3).
+func TestCleanupAgesOutDeadJobs(t *testing.T) {
+	conn := testDB(t)
+	ctx := context.Background()
+	q := queue.New(conn)
+	var tool int64
+	if err := conn.QueryRow(`INSERT INTO tools (slug, name) VALUES ('c','c') RETURNING id`).Scan(&tool); err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range []struct {
+		stage, state, age string
+	}{
+		{"health", "done", "8 days"},   // removed: done, older than 7 days
+		{"security", "done", "1 hour"}, // kept: recent
+		{"smoke", "dead", "31 days"},   // removed: dead, older than DeadTTL
+		{"enrich", "dead", "2 days"},   // kept: recent dead job, still inspectable
+	} {
+		if _, err := conn.Exec(`INSERT INTO jobs (stage, tool_id, state, updated_at) VALUES ($1,$2,$3, now() - $4::interval)`,
+			j.stage, tool, j.state, j.age); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := q.Cleanup(ctx, 7*24*time.Hour)
+	if err != nil || n != 2 {
+		t.Fatalf("cleanup removed %d (err %v), want 2", n, err)
+	}
+	var left []string
+	rows, err := conn.Query(`SELECT stage FROM jobs ORDER BY stage`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s string
+		_ = rows.Scan(&s)
+		left = append(left, s)
+	}
+	if strings.Join(left, ",") != "enrich,security" {
+		t.Fatalf("jobs left: %v, want enrich,security", left)
+	}
+}
