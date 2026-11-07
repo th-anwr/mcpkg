@@ -157,13 +157,37 @@ Added `.github/workflows/ci.yml` (gofmt, vet, build, unit tests, Postgres e2e, g
 
 | # | Severity | Issue | Fix |
 |---|---|---|---|
-| 13 | **High** | CI jobs were not started: "your account is locked due to a billing issue". Nothing has compiled since the logx change. | Fix billing at github.com/settings/billing, then re-run the workflow. Public repos get free Actions minutes once unlocked. |
+| 13 | Fixed | GitHub Actions billing lock. Resolved by the owner on 2026-11-07; runs now start. | None. |
 | 14 | Med | Logging exists only in `cmd/mcpkg`, `app`, `discover`, the pipeline runner. 27 of 44 non-test files use no slog: all five stages, sandbox (docker/process), httpx, queue, sources, mcpclient, store, submit. A stuck smoke test or a rate-limited crawler is invisible. | Propagate `internal/logx`: `stages.Deps.Log` already exists, use `deps.Log.With("stage", name, "tool", slug, "job", id)` in each stage. httpx: Debug per request (host, status, ms, attempt), Warn on rate limit. sandbox: Info on container start/stop (image, runtime, exit code, duration). queue: Info on lease, retry, dead-letter. Rule: an error is logged once, at the runner, with those attrs; stages log progress and external calls only. |
 | 15 | Med | `DATABASE_URL` default is `postgres:postgres@127.0.0.1` with `sslmode=disable`. Fine for dev; silent if `.env` loses the line. | In `config.Load`, refuse to start when `SITE_URL` is https and `DATABASE_URL` equals the default. |
 | 16 | Med | `bootstrap.sh` runs `curl get.docker.com | sh` and builds all images on the t4g.small (2 GB RAM + 2 GB swap). Go build + apt + osv-scanner download will be slow and may OOM. | Build in CI, push to GHCR, pull by tag on the box (section 2). Use the distro Docker package or pin the script version. |
-| 17 | Low | `ubuntu-latest` moved to Ubuntu 26 on 2026-10-19. | Pin `runs-on: ubuntu-24.04` in ci.yml. |
+| 17 | Fixed | `ubuntu-latest` pinned to `ubuntu-24.04` in ci.yml (commit 9656a6a). | None. |
 | 18 | Low | CSP `img-src https:` lets README images load from any host (tracking pixels in READMEs). | Proxy README images or allow-list `raw.githubusercontent.com`, `img.shields.io`, registry CDNs. |
 | 19 | Low | `make-env.sh` writes helper vars `ADMIN_PASS`/`PG_PASS` next to the real ones. | Cosmetic; drop or comment them. |
 | 20 | Info | Good as is: `http.Server` has Read/Write/ReadHeader timeouts; security headers set; httpx has per-host rate limit, Retry-After, body caps; e2e tests skip without `TEST_DATABASE_URL`; admin has CSRF guard. | None. |
 
-**Suite status**: not run since the logx change. Blocked by issue 13.
+**Suite status**: see section 8.
+
+## 8. CI results (2026-11-07, run 42385463339)
+
+https://github.com/th-anwr/mcpkg/actions/runs/42385463339
+
+| Job | Step | Result |
+|---|---|---|
+| go | gofmt, go vet, go build | pass |
+| go | unit tests (`go test ./...`) | pass |
+| go | Postgres e2e (`internal/e2e` with `TEST_DATABASE_URL`) | pass |
+| go | govulncheck | pass (advisory) |
+| docker | `deploy/Dockerfile` app image | pass |
+| docker | `sandbox/runner.Dockerfile` | pass |
+| docker | `sandbox/proxy.Dockerfile` | **fail** (issue 21) |
+
+Earlier runs failed on a type mismatch in `internal/logx/log.go` (int64 vs int in the `Open` call); fixed in commit 992702d. Go code compiles and the whole test suite is green on GitHub.
+
+| # | Severity | Issue | Fix |
+|---|---|---|---|
+| 21 | **High** | Egress proxy image never built: squid rejects `sandbox/squid.conf` with `'registry.npmjs.org' is a subdomain of '.npmjs.org'` (overlapping entries in the `registries` ACL). Without this image no smoke test can install anything in production. | In `sandbox/squid.conf` line 11, remove `registry.npmjs.org` (already covered by `.npmjs.org`). CI will confirm. |
+| 22 | Med | The same allowlist has no crates.io hosts, but `internal/sources/crates.go` discovers Rust servers. `cargo install` will fail in the sandbox for every one of them. | Add `acl registries dstdomain crates.io index.crates.io static.crates.io`. Also consider `cdn.jsdelivr.net` if any install path uses it. |
+| 23 | Low | `actions/checkout@v4`, `setup-go@v5`, `setup-buildx-action@v3` target Node 20, now deprecated on runners (warning only). | Bump to the current majors when convenient. |
+
+**Rule**: `squid -k parse` already runs in the proxy Dockerfile, which is what caught this. Keep it, and add the three Docker builds to the required checks on `main` once branch protection is on.
