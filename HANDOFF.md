@@ -3,10 +3,10 @@
 ## What it is
 npm-style catalog of open-source MCP servers. Every server is discovered, checked (health → security → smoke → enrich → render), scored A–F, and gets a page with exact install steps for people and agents. Working name "mcpkg" (domain not chosen; mcp.net likely taken).
 
-## Status (2026-11-07)
-- Code complete, all tests pass: unit, Postgres, end-to-end with real npm/PyPI installs.
-- **Not deployed yet.** Plan: AWS CloudShell tonight, following `docs/DEPLOY.md`.
-- The AWS scripts were only dry-run against a fake AWS CLI. Docker images have never been built: the build sandbox blocked image registries.
+## Status (2026-11-08)
+- Code complete, all tests pass: unit, Postgres, end-to-end with real npm/PyPI installs, plus golangci-lint, gosec, and the tier-1 benchmark gate (B0–B3, B5) in CI.
+- **Not deployed yet.** Plan: AWS CloudShell following `docs/DEPLOY.md`. Every `push.sh` run now requires `GATE_SHA=<sha>` with a green `bench/gate.json` for that sha (committed to `main` by the `bench-gate` CI job).
+- The AWS scripts were only dry-run against a fake AWS CLI. Docker images have never been built on a real box: the build sandbox blocked image registries.
 
 ## Stack and decisions
 - One Go binary (`cmd/mcpkg`), Postgres only (it also holds the job queue: SKIP LOCKED, leases, priority). Deps: `lib/pq`, `goldmark`.
@@ -41,20 +41,12 @@ E2E_NETWORK=1 (same) go test ./internal/e2e -run TestFullPipeline    # real inst
 ```
 
 ## Next tasks (agreed or offered)
-1. Deploy tonight (`docs/DEPLOY.md`), then fix whatever breaks.
-2. **Benchmarks stage plus a "Benchmarks" tab** showing raw results, tool version and run date for each tool. Run on every repo:
-   - MCP conformance suite (`npx @modelcontextprotocol/conformance server --url …`; stdio servers need a stdio→HTTP bridge)
-   - OpenSSF Scorecard
-   - OSV-Scanner / deps.dev
-   - Trivy
-   - Gitleaks
-   - Semgrep CE (check the registry-rules license before using them in a public service)
-   - Cisco mcp-scanner (YARA mode)
-   - mcplint
-   - npm/PyPI provenance attestations
-
-   For the top ~500 only: promptfoo MCP red-team (needs an LLM key). Skip CodeQL (license forbids a hosted service) and mcp-scan (sends tool descriptions to its cloud by default).
-3. Later: LLM descriptions via Bedrock (`mcpkg eval-llm` first), domain + HTTPS, semantic search, author claims, PyPI download counts.
+1. Deploy (`docs/DEPLOY.md`), then fix whatever breaks on the first real box.
+2. **Benchmarks: tier-1 done.** `internal/bench` (scorecard, osv, mcp-conformance; CLI adapters for gitleaks/trivy/semgrep/mcplint), `tool_benchmarks`/`bench_runs` tables, Benchmarks tab + `/api/bench/{slug}`, and the `bench-gate` CI job enforcing B0–B3+B5 per commit (`docs/BENCH_GATE.md`). Remaining:
+   - Wire the CLI scanners to `BENCH_REPO_DIR` checkouts (they currently report `skip=scanner-unavailable`).
+   - stdio conformance bridge, promptfoo red-team for the top 500.
+   - **Tier-2 soak before public launch**: B6 perf, B7 cost, B8 teardown/restore drill.
+3. Later: LLM descriptions via Bedrock (`mcpkg eval-llm` first), domain + HTTPS, GitHub sign-in + claims, metadata stage + npm-style tabs, semantic search, author claims, PyPI download counts.
 
 ## Working style
 - User: knows Go, Rust, C++, Python, JS; wants terse answers; use the Mobbin connector for UI design references.
