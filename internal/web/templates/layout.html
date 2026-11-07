@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}{{if ne .Title .Site}} · {{.Site}}{{end}}</title>
+{{with .Description}}<meta name="description" content="{{.}}">{{end}}
+{{with .Canonical}}<link rel="canonical" href="{{.}}">{{end}}
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="alternate" type="text/plain" href="/llms.txt" title="Index for AI agents">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <a class="logo" href="/" aria-label="{{.Site}} home"><span class="logo-mark" aria-hidden="true">{}</span><span>{{.Site}}</span></a>
+    <form class="topsearch" action="/search" role="search">
+      <input name="q" value="{{.Query}}" placeholder="Search MCP servers: youtube, postgres, browser…" aria-label="Search MCP servers" autocomplete="off">
+      <button type="submit">Search</button>
+    </form>
+    <nav class="topnav" aria-label="Main">
+      <a href="/search"{{if eq .Nav "search"}} aria-current="page"{{end}}>Browse</a>
+      <a href="/agents"{{if eq .Nav "agents"}} aria-current="page"{{end}}>For agents</a>
+      <a href="/submit" class="btn-small"{{if eq .Nav "submit"}} aria-current="page"{{end}}>Add a server</a>
+    </nav>
+  </div>
+</header>
+<main id="main" class="wrap">
+{{template "content" .}}
+</main>
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div>
+      <strong>{{.Site}}</strong> indexes open-source MCP servers from the official MCP Registry, npm, PyPI, crates.io and GitHub,
+      then checks each one: repo health, static security scan, sandboxed smoke test. Scores are computed by code, not by an AI.
+    </div>
+    <nav aria-label="Footer">
+      <a href="/agents">Agent API</a>
+      <a href="/llms.txt">llms.txt</a>
+      <a href="/v0.1/servers">Subregistry API</a>
+      <a href="/submit">Add a server</a>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>

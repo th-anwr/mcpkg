@@ -1,0 +1,26 @@
+{{define "content"}}
+<div class="narrow">
+  <h1>Add your MCP server</h1>
+  <p class="lede">Paste one link. We find the package, run the checks, and publish a page with install steps for every client. No account needed.</p>
+  {{with .Message}}<div class="callout ok">{{.}}</div>{{end}}
+  {{with .Error}}<div class="callout bad">{{.}}</div>{{end}}
+  <form method="post" action="/submit" class="submit-form">
+    <label for="url">Link</label>
+    <input id="url" name="url" type="url" required value="{{.Form}}" placeholder="https://github.com/you/your-mcp-server">
+    <p class="muted small">Accepted: a GitHub/GitLab repo (optionally a monorepo folder), an npmjs.com or pypi.org package page, or an https MCP endpoint.</p>
+    <button type="submit" class="btn">Submit</button>
+  </form>
+
+  <h2>What happens next</h2>
+  <ol class="steps">
+    <li><b>Repo health</b>: commits, releases, open pull requests and issues.</li>
+    <li><b>Security scan</b> of the package users actually install, plus known-vulnerability and malicious-package lookups.</li>
+    <li><b>Smoke test</b>: we install it in a sandbox and run the MCP handshake with no network. API keys get placeholder values, so "needs an API key" is a normal result.</li>
+    <li><b>Description</b> written by an open-source model and checked against your README.</li>
+    <li><b>Score and page</b>, re-checked weekly and on every new release.</li>
+  </ol>
+
+  <h2>Best: publish to the official MCP Registry</h2>
+  <p>Servers published to <a href="https://registry.modelcontextprotocol.io" rel="noopener">registry.modelcontextprotocol.io</a> are picked up automatically within an hour, including your declared environment variables and arguments, which makes our install steps exact.</p>
+</div>
+{{end}}

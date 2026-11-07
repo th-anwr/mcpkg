@@ -1,0 +1,119 @@
+# One-box deployment.
+#   default services: db, migrate, web, scheduler, light worker (health/enrich/render), caddy
+#   profile "heavy":  security + smoke worker and the egress proxy (same box, or spot workers)
+#
+#   docker compose -f deploy/docker-compose.yml --env-file .env up -d                 # core
+#   docker compose -f deploy/docker-compose.yml --env-file .env --profile heavy up -d # + heavy
+#
+# On a separate spot worker, run only the heavy services, with DATABASE_URL pointing at the core box:
+#   docker compose -f deploy/docker-compose.yml --env-file .env --profile heavy up -d --no-deps worker-heavy egress-proxy
+# The sandbox image must exist on any box that runs worker-heavy:
+#   docker build -f sandbox/runner.Dockerfile -t mcpkg-runner:latest sandbox
+name: mcpkg
+
+x-app: &app
+  image: mcpkg:latest
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  env_file: ../.env
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "3" }
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mcpkg
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: mcpkg
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Bind to the private interface only, so spot workers in the VPC can reach it.
+    ports:
+      - "${DB_BIND:-127.0.0.1}:5432:5432"
+    command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_connections=100"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcpkg -d mcpkg"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      db: { condition: service_healthy }
+
+  web:
+    <<: *app
+    command: ["serve", "-addr", ":8080", "-migrate=false"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 15s
+      retries: 5
+
+  scheduler:
+    <<: *app
+    command: ["scheduler"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  worker-light:
+    <<: *app
+    command: ["worker", "-stages", "health,enrich,render"]
+    environment:
+      WORKER_ID: core-light
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  worker-heavy:
+    <<: *app
+    profiles: ["heavy"]
+    command: ["worker", "-stages", "security,smoke"]
+    environment:
+      SANDBOX: docker
+      WORKER_ID: ${WORKER_ID:-heavy-1}
+    volumes:
+      # The worker starts throwaway sandbox containers through the host daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [default]
+
+  egress-proxy:
+    image: mcpkg-egress-proxy:latest
+    build:
+      context: ../sandbox
+      dockerfile: proxy.Dockerfile
+    profiles: ["heavy"]
+    networks:
+      default: {}
+      egress:
+        aliases: [egress-proxy]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8-alpine
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [web]
+    restart: unless-stopped
+
+networks:
+  default: {}
+  # Internal network: sandbox install containers can reach only the egress proxy.
+  egress:
+    name: mcpkg-egress
+    internal: true
+
+volumes:
+  pgdata: {}
+  caddy_data: {}

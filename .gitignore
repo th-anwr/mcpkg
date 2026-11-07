@@ -1,0 +1,5 @@
+bin/
+backups/
+.env
+*.test
+/tmp/

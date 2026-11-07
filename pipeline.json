@@ -1,0 +1,29 @@
+{
+  "entry": "health",
+  "order": ["health", "security", "smoke", "enrich", "render"],
+  "stages": {
+    "health":   { "enabled": true, "concurrency": 2, "batch": 25, "timeout_sec": 180, "max_attempts": 5, "next": "security" },
+    "security": { "enabled": true, "concurrency": 2, "batch": 1,  "timeout_sec": 300, "max_attempts": 3, "next": "smoke" },
+    "smoke":    { "enabled": true, "concurrency": 2, "batch": 1,  "timeout_sec": 360, "max_attempts": 2, "next": "enrich" },
+    "enrich":   { "enabled": true, "concurrency": 4, "batch": 1,  "timeout_sec": 120, "max_attempts": 3, "next": "render" },
+    "render":   { "enabled": true, "concurrency": 2, "batch": 25, "timeout_sec": 60,  "max_attempts": 3, "next": "" }
+  },
+  "gates": {
+    "skip_heavy_if_archived": true,
+    "skip_heavy_if_no_commit_days": 0,
+    "stop_on_malicious": true,
+    "review_on_high_findings": true,
+    "skip_unchanged_within_days": 30
+  },
+  "recheck": { "health_every_days": 7 },
+  "hooks": [
+    {
+      "name": "require-license",
+      "after": "health",
+      "command": ["python3", "hooks/examples/require_license.py"],
+      "timeout_sec": 10,
+      "enabled": false,
+      "on_error": "continue"
+    }
+  ]
+}

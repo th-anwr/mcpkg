@@ -1,0 +1,212 @@
+{{define "content"}}{{$t := .Tool}}{{$tab := .Tab}}
+<article class="pkg">
+  <header class="pkg-head">
+    <div class="pkg-title-row">
+      <h1 class="pkg-name">{{$t.DisplayName}}</h1>
+      {{if $t.Version}}<span class="pkg-version">v{{$t.Version}}</span>{{end}}
+    </div>
+    <div class="pkg-meta">
+      <code class="pkg-id">{{$t.Name}}</code>
+      <span aria-hidden="true">·</span>
+      {{if $t.VerifiedAt}}<span>Checked {{ago $t.VerifiedAt}}</span>{{else}}<span>Checks in progress</span>{{end}}
+      {{if $t.PublishedAt}}<span aria-hidden="true">·</span><span>Published {{ago $t.PublishedAt}}</span>{{end}}
+    </div>
+    {{with $t.Summary}}<p class="pkg-summary">{{.}}</p>{{end}}
+    <div class="chips">
+      <a class="chip grade {{gradeClass $t.Grade}}" href="?tab=health" title="Trust score (see Health &amp; security)">
+        {{if $t.Grade}}<b>{{$t.Grade}}</b> {{deref $t.ScoreTotal}}/100{{else}}Not scored yet{{end}}</a>
+      <a class="chip smoke smoke-{{smokeClass $t.SmokeStatus}}" href="?tab=health"><span class="dot" aria-hidden="true"></span>{{smokeLabel $t.SmokeStatus}}</a>
+      {{if eq $t.Status "unmaintained"}}<span class="chip warn">Archived / inactive</span>{{end}}
+      {{if eq $t.Status "deprecated"}}<span class="chip warn">Deprecated</span>{{end}}
+      {{if $t.Health}}{{with $t.Health.License}}<span class="chip">{{.}}</span>{{end}}{{end}}
+      {{range $t.Categories}}<a class="chip cat" href="/search?category={{.}}">{{catLabel .}}</a>{{end}}
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Sections">
+    <a href="?tab=readme"{{if eq $tab "readme"}} class="active" aria-current="page"{{end}}>Readme</a>
+    <a href="?tab=tools"{{if eq $tab "tools"}} class="active" aria-current="page"{{end}}>Tools{{if $t.Smoke}} <span class="count">{{len $t.Smoke.Tools}}</span>{{end}}</a>
+    <a href="?tab=install"{{if eq $tab "install"}} class="active" aria-current="page"{{end}}>Install</a>
+    <a href="?tab=health"{{if eq $tab "health"}} class="active" aria-current="page"{{end}}>Health &amp; security</a>
+  </nav>
+
+  <div class="pkg-grid">
+    <section class="pkg-main">
+    {{if eq $tab "readme"}}
+      {{if $t.Enrich}}{{with $t.Enrich.Description}}<div class="callout about"><p>{{.}}</p>
+        {{if $t.Enrich.Caveats}}<ul class="caveats">{{range $t.Enrich.Caveats}}<li>{{.}}</li>{{end}}</ul>{{end}}
+        <p class="fineprint">{{if eq $t.Enrich.Source "llm"}}Summary written by an open-source model from the README and checked against it.{{else}}Summary extracted from the README.{{end}}</p></div>{{end}}{{end}}
+      {{if .ReadmeHTML}}<div class="markdown">{{.ReadmeHTML}}</div>
+      {{else}}<p class="empty">No README found for this server.</p>{{end}}
+
+    {{else if eq $tab "tools"}}
+      {{if and $t.Smoke $t.Smoke.Tools}}
+        <p class="lede">These tools were reported by the server itself during our smoke test (<code>tools/list</code>), not copied from the README.</p>
+        <div class="tool-list">
+        {{range $t.Smoke.Tools}}
+          <section class="tool-item" id="tool-{{.Name}}">
+            <h3><code>{{.Name}}</code>{{with .Title}} <span class="muted">{{.}}</span>{{end}}</h3>
+            {{with .Description}}<p>{{truncate . 600}}</p>{{end}}
+            {{with params .InputSchema}}
+            <table class="params"><thead><tr><th>Parameter</th><th>Type</th><th>Description</th></tr></thead><tbody>
+            {{range .}}<tr><td><code>{{.Name}}</code>{{if .Required}} <span class="req" title="required">*</span>{{end}}</td><td>{{.Type}}</td><td>{{truncate .Description 200}}</td></tr>{{end}}
+            </tbody></table>{{end}}
+          </section>
+        {{end}}
+        </div>
+      {{else if $t.Smoke}}
+        <p class="empty">{{if eq $t.Smoke.Status "works"}}The server started but listed no tools{{if or $t.Smoke.PromptsCount $t.Smoke.ResourcesCount}} (it offers {{$t.Smoke.PromptsCount}} prompts and {{$t.Smoke.ResourcesCount}} resources){{end}}.{{else}}We couldn't list tools: {{smokeLabel $t.Smoke.Status}}{{with $t.Smoke.SkipReason}} ({{.}}){{end}}.{{end}}</p>
+      {{else}}<p class="empty">Smoke test pending.</p>{{end}}
+
+    {{else if eq $tab "install"}}
+      {{if $t.Install}}{{$m := $t.Install}}
+        {{range $m.Warnings}}<div class="callout warn">{{.}}</div>{{end}}
+        {{if $m.Env}}
+        <h2>Values you need</h2>
+        <table class="params env"><thead><tr><th>Variable</th><th></th><th>What it is</th></tr></thead><tbody>
+        {{range $m.Env}}<tr><td><code>{{.Name}}</code></td><td>{{if .Required}}<span class="tag req-tag">required</span>{{else}}<span class="tag">optional</span>{{end}}{{if .Secret}} <span class="tag secret">secret</span>{{end}}</td>
+          <td>{{with .Help}}{{.}}{{else}}{{.Description}}{{end}}{{with .Default}} <span class="muted">Default: <code>{{.}}</code></span>{{end}}</td></tr>{{end}}
+        </tbody></table>{{end}}
+        {{range $i, $meth := $m.Methods}}
+        <section class="method">
+          <h2>{{$meth.Label}}{{if and (eq $i 0) $t.Smoke}}{{if eq $t.Smoke.Status "works"}} <span class="tag ok-tag">verified</span>{{end}}{{end}}</h2>
+          {{with $meth.Requires}}<p class="muted">Requires {{join . ", "}}</p>{{end}}
+          <div class="ctabs" data-tabs>
+            <div class="ctabs-list" role="tablist">{{range $j, $c := $meth.Clients}}<button type="button" role="tab" data-tab="m{{$i}}c{{$j}}"{{if eq $j 0}} aria-selected="true"{{end}}>{{$c.Label}}</button>{{end}}</div>
+            {{range $j, $c := $meth.Clients}}
+            <div class="ctabs-panel" role="tabpanel" id="m{{$i}}c{{$j}}"{{if ne $j 0}} data-hidden{{end}}>
+              {{with $c.Location}}<div class="loc">{{if eq $c.Kind "cli"}}Run in a terminal{{else}}Add to <code>{{.}}</code>{{end}}</div>{{else}}<div class="loc">Run in a terminal</div>{{end}}
+              <div class="code"><pre><code>{{$c.Content}}</code></pre><button type="button" class="copy" data-copy>Copy</button></div>
+            </div>{{end}}
+          </div>
+        </section>{{end}}
+        {{if not $m.Methods}}<p class="empty">No installable package or endpoint was found. See the README for build-from-source steps.</p>{{end}}
+        <h2>For AI agents</h2>
+        <ol class="steps">{{range $m.AgentSteps}}<li>{{.}}</li>{{end}}</ol>
+        <p>Machine-readable: <a href="/tool/{{$t.Slug}}/install.md">install.md</a> · <a href="/api/tools/{{$t.Slug}}/manifest.json">manifest.json</a></p>
+      {{else}}<p class="empty">Install instructions appear when checks finish.</p>{{end}}
+
+    {{else}}
+      {{if $t.Score}}{{$s := $t.Score}}
+      <section class="score-card">
+        <div class="score-big {{gradeClass $s.Grade}}"><span class="g">{{$s.Grade}}</span><span class="n">{{$s.Total}}<small>/100</small></span></div>
+        <div class="bars">
+          <div class="bar"><span>Maintenance</span><div class="track"><i style="width: {{pct $s.Maintenance}}%"></i></div><b>{{$s.Maintenance}}</b></div>
+          <div class="bar"><span>Security</span><div class="track"><i style="width: {{pct $s.Security}}%"></i></div><b>{{$s.Security}}</b></div>
+          <div class="bar"><span>Works</span><div class="track"><i style="width: {{pct $s.Works}}%"></i></div><b>{{$s.Works}}</b></div>
+          <div class="bar"><span>Community</span><div class="track"><i style="width: {{pct $s.Community}}%"></i></div><b>{{$s.Community}}</b></div>
+        </div>
+      </section>
+      <p class="fineprint">Weights: maintenance 30, security 30, works 25, community 15. Formula {{$s.Version}}, computed {{agoT $s.ComputedAt}} by code; an AI never sets scores.</p>
+      {{with $s.Caps}}<div class="callout warn"><strong>Score capped:</strong> {{join . "; "}}</div>{{end}}
+      {{with $s.Reasons}}<ul class="reasons">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+      {{end}}
+
+      {{if $t.Smoke}}{{$sm := $t.Smoke}}
+      <h2>Smoke test</h2>
+      <dl class="kv">
+        <dt>Result</dt><dd><span class="chip smoke smoke-{{smokeClass $sm.Status}}"><span class="dot"></span>{{smokeLabel $sm.Status}}</span>{{with $sm.SkipReason}} <span class="muted">{{.}}</span>{{end}}</dd>
+        {{with $sm.Command}}<dt>Started with</dt><dd><code>{{.}}</code></dd>{{end}}
+        {{with $sm.Sandbox}}<dt>Sandbox</dt><dd>{{.}}{{if hasPrefix . "docker"}} (isolated container, no network while running){{else}} (development mode: not isolated){{end}}</dd>{{end}}
+        {{with $sm.ServerName}}<dt>Server</dt><dd>{{.}} {{$sm.ServerVersion}}</dd>{{end}}
+        {{with $sm.ProtocolVersion}}<dt>MCP protocol</dt><dd>{{.}}</dd>{{end}}
+        {{if $sm.StartupMs}}<dt>Startup</dt><dd>{{$sm.StartupMs}} ms</dd>{{end}}
+        {{if $sm.StdoutPollution}}<dt>Note</dt><dd>Prints logs to stdout, which can break some clients.</dd>{{end}}
+        {{with $sm.Error}}<dt>Error</dt><dd><code>{{.}}</code></dd>{{end}}
+      </dl>
+      {{with $sm.LogTail}}<details><summary>Server output</summary><pre class="log">{{.}}</pre></details>{{end}}
+      {{range $sm.DescriptionFindings}}<div class="callout bad"><strong>{{.Rule}}</strong> in {{.File}}: {{.Message}}{{with .Snippet}}<br><code>{{.}}</code>{{end}}</div>{{end}}
+      {{end}}
+
+      {{if $t.Security}}{{$sec := $t.Security}}
+      <h2>Security scan</h2>
+      <p class="muted">Scanned {{if eq $sec.Scanned "npm-tarball"}}the published npm package{{else if eq $sec.Scanned "pypi-dist"}}the published PyPI distribution{{else if eq $sec.Scanned "git"}}the git repository{{else}}nothing (no artifact found){{end}}{{with $sec.Target}} <code>{{.}}</code>{{end}}{{if $sec.Files}}, {{$sec.Files}} files{{end}}. Tools: {{join $sec.Scanners ", "}}.</p>
+      {{if $sec.Blocked}}<div class="callout bad"><strong>Blocked:</strong> {{$sec.BlockReason}}</div>{{end}}
+      {{with $sec.Capabilities}}<h3>Capabilities found in the code</h3><ul class="caps">{{range .}}<li>{{capLabel .}}</li>{{end}}</ul>{{end}}
+      {{if or $sec.Vulns.Critical $sec.Vulns.High $sec.Vulns.Medium}}<p>Dependency vulnerabilities: <b>{{$sec.Vulns.Critical}}</b> critical, <b>{{$sec.Vulns.High}}</b> high, <b>{{$sec.Vulns.Medium}}</b> medium.</p>{{end}}
+      {{if $sec.Scorecard}}<p>OpenSSF Scorecard: <b>{{f1 $sec.Scorecard}}</b>/10</p>{{end}}
+      {{with $sec.Findings}}
+      <table class="findings"><thead><tr><th>Severity</th><th>Finding</th><th>Where</th></tr></thead><tbody>
+      {{range .}}<tr><td><span class="sev {{sevClass .Severity}}">{{.Severity}}</span></td><td><b>{{.Rule}}</b>: {{.Message}}{{with .Snippet}}<br><code class="snip">{{.}}</code>{{end}}</td><td>{{with .File}}<code>{{.}}</code>{{end}}</td></tr>{{end}}
+      </tbody></table>
+      <p class="fineprint">Static findings are leads for human review, not proof of malice. Only known-malicious advisories (OSV MAL-*) and registry takedowns block a server automatically.</p>
+      {{else}}<p>No findings.</p>{{end}}
+      {{end}}
+
+      {{if $t.Health}}{{$h := $t.Health}}
+      <h2>Repository health</h2>
+      <dl class="kv">
+        {{with $h.Repo}}<dt>Repository</dt><dd>{{.}}{{if $h.Archived}} <span class="tag warn-tag">archived</span>{{end}}</dd>{{end}}
+        <dt>Last commit</dt><dd>{{ago $h.LastCommitAt}}</dd>
+        {{with $h.LastReleaseTag}}<dt>Last release</dt><dd>{{.}} ({{ago $h.LastReleaseAt}})</dd>{{end}}
+        <dt>Commits (90 days)</dt><dd>{{$h.RecentCommits90d}}</dd>
+        <dt>Pull requests</dt><dd>{{$h.OpenPRs}} open, {{$h.MergedPRs}} merged{{if $h.OldestOpenPRAt}}; oldest open since {{date $h.OldestOpenPRAt}}{{end}}</dd>
+        <dt>Issues</dt><dd>{{$h.OpenIssues}} open, {{$h.ClosedIssues}} closed</dd>
+        <dt>Contributors</dt><dd>{{$h.Contributors}}</dd>
+      </dl>
+      {{end}}
+
+      {{with .Runs}}
+      <h2>Check history</h2>
+      <ol class="timeline">{{range .}}<li><span class="when">{{agoT .CreatedAt}}</span> <b>{{stageLabel .Stage}}</b> <span class="tag">{{.Decision}}</span>{{with .Notes}} <span class="muted">{{join . "; "}}</span>{{end}}</li>{{end}}</ol>
+      {{end}}
+    {{end}}
+    </section>
+
+    <aside class="pkg-side">
+      <div class="side-block install-box">
+        <h3>Install</h3>
+        {{with .Method}}
+        <div class="ctabs" data-tabs>
+          <div class="ctabs-list" role="tablist">{{range $j, $c := .Clients}}<button type="button" role="tab" data-tab="side{{$j}}"{{if eq $j 0}} aria-selected="true"{{end}}>{{$c.Label}}</button>{{end}}</div>
+          {{range $j, $c := .Clients}}<div class="ctabs-panel" role="tabpanel" id="side{{$j}}"{{if ne $j 0}} data-hidden{{end}}>
+            <div class="code small"><pre><code>{{$c.Content}}</code></pre><button type="button" class="copy" data-copy>Copy</button></div>
+          </div>{{end}}
+        </div>
+        {{if $t.Install}}{{with $t.Install.Env}}<p class="muted small">Needs: {{range $i, $e := .}}{{if $i}}, {{end}}<code>{{$e.Name}}</code>{{end}}. <a href="?tab=install">Details</a></p>{{end}}{{end}}
+        {{else}}<p class="muted">Install steps appear after checks finish.</p>{{end}}
+        <a class="agent-link" href="/tool/{{$t.Slug}}/install.md">install.md for AI agents →</a>
+      </div>
+
+      <div class="side-block">
+        <h3>Trust score</h3>
+        {{if $t.Score}}
+        <div class="mini-score"><span class="g {{gradeClass $t.Score.Grade}}">{{$t.Score.Grade}}</span><span><b>{{$t.Score.Total}}</b>/100</span></div>
+        <div class="mini-bars">
+          <div><span>Maintenance</span><b class="t"><i style="width: {{pct $t.Score.Maintenance}}%"></i></b></div>
+          <div><span>Security</span><b class="t"><i style="width: {{pct $t.Score.Security}}%"></i></b></div>
+          <div><span>Works</span><b class="t"><i style="width: {{pct $t.Score.Works}}%"></i></b></div>
+          <div><span>Community</span><b class="t"><i style="width: {{pct $t.Score.Community}}%"></i></b></div>
+        </div>
+        <a href="?tab=health" class="small">Why this score?</a>
+        {{else}}<p class="muted">Checks pending.</p>{{end}}
+      </div>
+
+      {{if $t.Security}}{{with $t.Security.Capabilities}}
+      <div class="side-block"><h3>Can</h3><ul class="caps">{{range .}}<li>{{capLabel .}}</li>{{end}}</ul></div>
+      {{end}}{{end}}
+
+      <div class="side-block">
+        <dl class="facts">
+          {{with $t.RepoURL}}<dt>Repository</dt><dd><a href="{{.}}" rel="nofollow noopener">{{short .}}</a></dd>{{end}}
+          {{with $t.WebsiteURL}}<dt>Homepage</dt><dd><a href="{{.}}" rel="nofollow noopener">{{truncate . 40}}</a></dd>{{end}}
+          {{with $t.Version}}<dt>Version</dt><dd>{{.}}</dd>{{end}}
+          {{if $t.WeeklyDownloads}}<dt>Weekly downloads</dt><dd>{{num $t.WeeklyDownloads}}</dd>{{end}}
+          {{if $t.Stars}}<dt>Stars</dt><dd>{{num $t.Stars}}</dd>{{end}}
+          {{if $t.Health}}<dt>Last commit</dt><dd>{{ago $t.Health.LastCommitAt}}</dd>
+          <dt>Open PRs</dt><dd>{{$t.Health.OpenPRs}}</dd>
+          <dt>Open issues</dt><dd>{{$t.Health.OpenIssues}}</dd>{{end}}
+          {{if $t.Smoke}}{{with $t.Smoke.ProtocolVersion}}<dt>MCP protocol</dt><dd>{{.}}</dd>{{end}}{{end}}
+          <dt>Listed from</dt><dd>{{range $k, $v := $t.Sources}}<span class="tag">{{$k}}</span> {{end}}</dd>
+        </dl>
+      </div>
+
+      <div class="side-block">
+        <h3>README badge</h3>
+        <img src="/badge/{{$t.Slug}}.svg" alt="{{.Site}} badge" height="20">
+        <div class="code small"><pre><code>[![{{.Site}}]({{.SiteURL}}/badge/{{$t.Slug}}.svg)]({{.SiteURL}}/tool/{{$t.Slug}})</code></pre><button type="button" class="copy" data-copy>Copy</button></div>
+      </div>
+    </aside>
+  </div>
+</article>
+{{end}}

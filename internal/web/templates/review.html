@@ -1,0 +1,24 @@
+{{define "content"}}
+<h1>Review queue</h1>
+<p class="muted">Sampled AI-written descriptions, high-severity static findings, suspicious tool descriptions, and blocks. Approve keeps the page as is; Hide removes it from the catalog.</p>
+{{if .Reviews}}
+<table class="findings">
+  <thead><tr><th>Tool</th><th>Reason</th><th>Details</th><th>Opened</th><th></th></tr></thead>
+  <tbody>
+  {{range .Reviews}}
+  <tr>
+    <td><a href="/tool/{{.Slug}}?tab=health">{{.Name}}</a></td>
+    <td><span class="tag">{{.Reason}}</span></td>
+    <td><code class="snip">{{truncate .Details 240}}</code></td>
+    <td>{{agoT .CreatedAt}}</td>
+    <td class="actions">
+      <form method="post" action="/admin/review/{{.ID}}"><input type="hidden" name="state" value="approved"><button class="btn-small">Approve</button></form>
+      <form method="post" action="/admin/review/{{.ID}}"><input type="hidden" name="state" value="rejected"><button class="btn-small ghost">Reject</button></form>
+      <form method="post" action="/admin/review/{{.ID}}"><input type="hidden" name="state" value="hidden"><button class="btn-small danger">Hide</button></form>
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p class="empty">Nothing to review.</p>{{end}}
+{{end}}

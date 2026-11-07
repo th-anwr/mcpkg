@@ -1,0 +1,57 @@
+{{define "content"}}{{$p := .Params}}
+<div class="search-layout">
+  <aside class="filters" aria-label="Filters">
+    <form action="/search" class="filter-form">
+      <input type="hidden" name="q" value="{{$p.Query}}">
+      {{with $p.Category}}<input type="hidden" name="category" value="{{.}}">{{end}}
+      <fieldset>
+        <legend>Smoke test</legend>
+        <label><input type="radio" name="status" value=""{{if eq $p.SmokeStatus ""}} checked{{end}}> Any</label>
+        <label><input type="radio" name="status" value="works"{{if eq $p.SmokeStatus "works"}} checked{{end}}> Works</label>
+        <label><input type="radio" name="status" value="needs_credentials"{{if eq $p.SmokeStatus "needs_credentials"}} checked{{end}}> Needs API key</label>
+      </fieldset>
+      <fieldset>
+        <legend>Minimum grade</legend>
+        <label><input type="radio" name="grade" value=""{{if eq $p.MinGrade ""}} checked{{end}}> Any</label>
+        <label><input type="radio" name="grade" value="A"{{if eq $p.MinGrade "A"}} checked{{end}}> A</label>
+        <label><input type="radio" name="grade" value="B"{{if eq $p.MinGrade "B"}} checked{{end}}> B or better</label>
+        <label><input type="radio" name="grade" value="C"{{if eq $p.MinGrade "C"}} checked{{end}}> C or better</label>
+      </fieldset>
+      <fieldset>
+        <legend>Sort</legend>
+        <select name="sort" aria-label="Sort">
+          <option value=""{{if eq $p.Sort ""}} selected{{end}}>Best match</option>
+          <option value="score"{{if eq $p.Sort "score"}} selected{{end}}>Trust score</option>
+          <option value="stars"{{if eq $p.Sort "stars"}} selected{{end}}>Stars</option>
+          <option value="recent"{{if eq $p.Sort "recent"}} selected{{end}}>Recently updated</option>
+        </select>
+      </fieldset>
+      <button type="submit" class="btn-small">Apply</button>
+    </form>
+    {{with .Categories}}
+    <nav class="cat-list" aria-label="Categories">
+      <h3>Categories</h3>
+      <a href="/search?q={{$p.Query}}"{{if eq $p.Category ""}} aria-current="page"{{end}}><span>All</span></a>
+      {{range .}}<a href="/search?q={{$p.Query}}&amp;category={{.Category}}"{{if eq $p.Category .Category}} aria-current="page"{{end}}><span>{{catLabel .Category}}</span><small>{{.Count}}</small></a>{{end}}
+    </nav>
+    {{end}}
+  </aside>
+  <section class="results">
+    <h1 class="results-title">{{.Title}}</h1>
+    <p class="muted">{{num .Total}} server{{if ne .Total 1}}s{{end}}{{with $p.Category}} in {{catLabel .}}{{end}}</p>
+    {{if .Results}}
+    <ul class="rows">{{range .Results}}{{template "row" .}}{{end}}</ul>
+    <nav class="pager" aria-label="Pages">
+      {{with .PrevPage}}<a href="{{.}}" rel="prev">← Previous</a>{{end}}
+      {{with .NextPage}}<a href="{{.}}" rel="next">Next →</a>{{end}}
+    </nav>
+    {{else}}
+    <div class="empty-state">
+      <p>No servers match{{with $p.Query}} “{{.}}”{{end}}.</p>
+      <p>Know one that should be here? <a href="/submit">Add it</a>.</p>
+    </div>
+    {{end}}
+  </section>
+</div>
+{{end}}
+

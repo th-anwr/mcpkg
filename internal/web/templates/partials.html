@@ -1,0 +1,21 @@
+{{/* Shared blocks used by several pages. */}}
+{{define "row"}}
+<li class="row">
+  <div class="row-main">
+    <a class="row-name" href="/tool/{{.Slug}}">{{.DisplayName}}</a>
+    {{if ne .DisplayName .Name}}<code class="row-id">{{.Name}}</code>{{end}}
+    <p>{{with .Summary}}{{truncate . 160}}{{else}}{{truncate .Description 160}}{{end}}</p>
+    <div class="row-meta">
+      {{with .Version}}<span>v{{.}}</span>{{end}}
+      {{if .LastCommitAt}}<span>updated {{ago .LastCommitAt}}</span>{{end}}
+      {{if .Stars}}<span>★ {{num .Stars}}</span>{{end}}
+      {{if .WeeklyDownloads}}<span>↓ {{num .WeeklyDownloads}}/wk</span>{{end}}
+      {{range .Categories}}<span class="tag">{{catLabel .}}</span>{{end}}
+    </div>
+  </div>
+  <div class="row-badges">
+    <span class="chip grade {{gradeClass .Grade}}">{{if .Grade}}<b>{{.Grade}}</b> {{deref .ScoreTotal}}{{else}}—{{end}}</span>
+    <span class="chip smoke smoke-{{smokeClass .SmokeStatus}}"><span class="dot"></span>{{smokeLabel .SmokeStatus}}</span>
+  </div>
+</li>
+{{end}}

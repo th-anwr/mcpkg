@@ -1,0 +1,51 @@
+{{define "content"}}
+<section class="hero">
+  <h1>Every open-source MCP server.<br><span class="accent">Checked before you install it.</span></h1>
+  <p class="hero-sub">One place to find tools for AI agents, from every registry, with repo health, a security scan, a sandboxed smoke test, and exact install steps for your client.</p>
+  <form class="hero-search" action="/search" role="search">
+    <input name="q" placeholder="What should your agent be able to do? e.g. get YouTube transcripts" aria-label="Search MCP servers" autofocus>
+    <button type="submit">Search</button>
+  </form>
+  <div class="stats">
+    <div><b>{{num .Stats.Listed}}</b><span>servers listed</span></div>
+    <div><b>{{num .Stats.Works}}</b><span>start and answer</span></div>
+    <div><b>{{num .Stats.NeedsKey}}</b><span>need an API key</span></div>
+    <div><b>{{num .Stats.Broken}}</b><span>fail to start</span></div>
+  </div>
+</section>
+
+<section class="pipeline-strip" aria-label="How every server is checked">
+  <div class="step"><span class="n">1</span><b>Repo health</b><small>commits, releases, PRs, issues</small></div>
+  <div class="step"><span class="n">2</span><b>Security scan</b><small>the package you'd install</small></div>
+  <div class="step"><span class="n">3</span><b>Smoke test</b><small>sandboxed, no network</small></div>
+  <div class="step"><span class="n">4</span><b>Describe</b><small>open model, fact-checked</small></div>
+  <div class="step"><span class="n">5</span><b>Score &amp; page</b><small>deterministic, explained</small></div>
+</section>
+
+{{with .Categories}}
+<section>
+  <h2 class="section-title">Browse by category</h2>
+  <div class="cat-grid">{{range .}}<a href="/search?category={{.Category}}"><span>{{catLabel .Category}}</span><small>{{.Count}}</small></a>{{end}}</div>
+</section>
+{{end}}
+
+<div class="two-col">
+  <section>
+    <h2 class="section-title">Top verified</h2>
+    {{if .Top}}<ul class="rows">{{range .Top}}{{template "row" .}}{{end}}</ul>{{else}}<p class="empty">Nothing verified yet. Run discovery and the workers to fill the catalog.</p>{{end}}
+  </section>
+  <section>
+    <h2 class="section-title">Recently active</h2>
+    {{if .Recent}}<ul class="rows">{{range .Recent}}{{template "row" .}}{{end}}</ul>{{else}}<p class="empty">No servers yet.</p>{{end}}
+  </section>
+</div>
+
+<section class="agents-callout">
+  <div>
+    <h2>Built for agents, too</h2>
+    <p>Agents can search this catalog and install servers on their own: every page has a machine-readable <code>install.md</code> and <code>manifest.json</code>, and the catalog speaks the MCP Registry API.</p>
+  </div>
+  <a class="btn" href="/agents">Agent docs</a>
+</section>
+{{end}}
+
