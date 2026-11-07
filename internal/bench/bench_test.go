@@ -3,8 +3,13 @@ package bench
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/mcpkg/mcpkg/internal/model"
 )
 
 func TestRepoSlug(t *testing.T) {
@@ -64,6 +69,33 @@ func TestRunToolPanicBecomesError(t *testing.T) {
 	rows := r.RunTool(t.Context(), []Scanner{panicScanner}, Target{Slug: "x"})
 	if len(rows) != 1 || rows[0].Verdict != VerdictError {
 		t.Fatalf("panic scanner: %+v", rows)
+	}
+}
+
+func TestConformanceSSRFGuard(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		if id, ok := m["id"]; !ok {
+			w.WriteHeader(202)
+			return
+		} else {
+			result := `{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"x","version":"1"}}`
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":%s}`, id, result)
+		}
+	}))
+	defer srv.Close()
+	target := Target{Slug: "x", Remotes: []model.Remote{{Type: "streamable-http", URL: srv.URL}}}
+
+	// Default: loopback refused (the production SSRF guard).
+	c := &Conformance{}
+	if r := c.Run(t.Context(), target); r.Verdict != VerdictFail {
+		t.Fatalf("private endpoint without AllowPrivate: verdict=%s, want fail", r.Verdict)
+	}
+	// Tests only: allowed.
+	c.AllowPrivate = true
+	if r := c.Run(t.Context(), target); r.Verdict != VerdictPass {
+		t.Fatalf("AllowPrivate: verdict=%s, want pass (%s)", r.Verdict, r.Raw)
 	}
 }
 

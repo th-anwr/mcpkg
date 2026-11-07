@@ -115,6 +115,9 @@ type Runner struct {
 	OSVAPI       string
 	UserAgent    string
 	Timeout      time.Duration // per scanner; default 90s
+	// AllowPrivate lets conformance reach loopback endpoints (tests only).
+	// Production workers always refuse private/loopback/metadata targets.
+	AllowPrivate bool
 	Log          *slog.Logger
 }
 
@@ -136,7 +139,7 @@ func (r *Runner) Scanners(names []string) []Scanner {
 		case "osv":
 			out = append(out, &OSV{API: r.OSVAPI, HTTP: r.HTTP, UA: r.UserAgent})
 		case "mcp-conformance":
-			out = append(out, &Conformance{HTTP: r.HTTP, Log: r.Log})
+			out = append(out, &Conformance{HTTP: r.HTTP, Log: r.Log, AllowPrivate: r.AllowPrivate})
 		case "gitleaks", "trivy", "semgrep", "mcplint":
 			out = append(out, &Binary{Bin: n})
 		default:
@@ -329,8 +332,9 @@ func ecosystem(registry string) string {
 // (same client and SSRF guard as the smoke stage). stdio-only tools are
 // skipped with a reason code — never reported as passing (gate B2).
 type Conformance struct {
-	HTTP *httpx.Client
-	Log  *slog.Logger
+	HTTP         *httpx.Client
+	Log          *slog.Logger
+	AllowPrivate bool // tests only
 }
 
 func (c *Conformance) Name() string    { return "mcp-conformance" }
@@ -342,7 +346,7 @@ func (c *Conformance) Run(ctx context.Context, t Target) Result {
 		return Skip(c, SkipNoEndpoint)
 	}
 	remote := t.Remotes[0]
-	client := mcpclient.SafeHTTPClient(40*time.Second, false)
+	client := mcpclient.SafeHTTPClient(40*time.Second, c.AllowPrivate)
 	start := time.Now()
 	info, err := mcpclient.HandshakeHTTPLog(ctx, client, remote.URL, remote.Type, nil, c.Log)
 	base.DurationMs = time.Since(start).Milliseconds()

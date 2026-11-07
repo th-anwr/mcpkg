@@ -156,7 +156,8 @@ func TestGate(t *testing.T) {
 	}
 
 	// --- Run -----------------------------------------------------------------
-	runner := &bench.Runner{HTTP: httpx.New("bench-gate/1"), ScorecardAPI: scorecard.URL, OSVAPI: osvAPI.URL}
+	runner := &bench.Runner{HTTP: httpx.New("bench-gate/1"), ScorecardAPI: scorecard.URL, OSVAPI: osvAPI.URL,
+		AllowPrivate: true} // fixtures live on loopback; production keeps the SSRF guard
 	scanners := runner.Scanners([]string{"scorecard", "osv", "mcp-conformance"})
 
 	run := func() [][]bench.Result {
