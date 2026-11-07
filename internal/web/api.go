@@ -10,6 +10,7 @@ import (
 
 	"github.com/mcpkg/mcpkg/internal/identity"
 	"github.com/mcpkg/mcpkg/internal/model"
+	"github.com/mcpkg/mcpkg/internal/store"
 )
 
 // ---- badge ----
@@ -169,6 +170,41 @@ func (s *Server) subregistryGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, s.serverEntry(t))
+}
+
+// ---- benchmark results (gate B4: raw results with provenance) ----
+
+func (s *Server) benchJSON(w http.ResponseWriter, r *http.Request) {
+	t, err := s.Store.GetToolBySlug(r.Context(), r.PathValue("slug"))
+	if err != nil || t.Visibility != "listed" {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	rows, err := s.Store.BenchmarksForTool(r.Context(), t.ID)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "benchmarks unavailable"})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"slug":       t.Slug,
+		"name":       t.Name,
+		"benchmarks": rows,
+		"checked_at": latestBenchTime(rows),
+		"count":      len(rows),
+	})
+}
+
+func latestBenchTime(rows []store.BenchmarkRow) any {
+	var latest time.Time
+	for _, r := range rows {
+		if r.RanAt.After(latest) {
+			latest = r.RanAt
+		}
+	}
+	if latest.IsZero() {
+		return nil
+	}
+	return latest.UTC().Format(time.RFC3339)
 }
 
 func firstNonEmpty(vals ...string) string {

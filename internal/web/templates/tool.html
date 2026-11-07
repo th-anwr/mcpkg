@@ -28,6 +28,7 @@
     <a href="?tab=tools"{{if eq $tab "tools"}} class="active" aria-current="page"{{end}}>Tools{{if $t.Smoke}} <span class="count">{{len $t.Smoke.Tools}}</span>{{end}}</a>
     <a href="?tab=install"{{if eq $tab "install"}} class="active" aria-current="page"{{end}}>Install</a>
     <a href="?tab=health"{{if eq $tab "health"}} class="active" aria-current="page"{{end}}>Health &amp; security</a>
+    {{if .Benchmarks}}<a href="?tab=benchmarks"{{if eq $tab "benchmarks"}} class="active" aria-current="page"{{end}}>Benchmarks <span class="count">{{len .Benchmarks}}</span></a>{{end}}
   </nav>
 
   <div class="pkg-grid">
@@ -150,6 +151,23 @@
       <h2>Check history</h2>
       <ol class="timeline">{{range .}}<li><span class="when">{{agoT .CreatedAt}}</span> <b>{{stageLabel .Stage}}</b> <span class="tag">{{.Decision}}</span>{{with .Notes}} <span class="muted">{{join . "; "}}</span>{{end}}</li>{{end}}</ol>
       {{end}}
+
+    {{else if eq $tab "benchmarks"}}
+      {{with .Benchmarks}}
+      <p class="lede">Raw benchmark results: one row per scanner, with the scanner version and run date. Verdicts are measurements, not scores — they never change this page's trust score or install steps.</p>
+      <table class="findings"><thead><tr><th>Scanner</th><th>Result</th><th>Version</th><th>Ran</th><th>Time</th></tr></thead><tbody>
+      {{range .}}<tr>
+        <td><code>{{.Scanner}}</code></td>
+        <td><span class="sev sev-{{.Verdict}}">{{.Verdict}}</span>{{with .SkipReason}} <span class="muted">({{.}})</span>{{end}}{{if .ExitCode}} <span class="muted">exit {{.ExitCode}}</span>{{end}}</td>
+        <td>{{.ScannerVersion}}</td>
+        <td>{{agoT .RanAt}}</td>
+        <td>{{.DurationMs}} ms</td>
+      </tr>
+      {{with .Raw}}<tr class="bench-raw"><td colspan="5"><details><summary>Raw output</summary><pre class="log">{{.}}</pre></details></td></tr>{{end}}
+      {{end}}
+      </tbody></table>
+      <p class="fineprint">Raw results are also available as JSON at <code>/api/bench/{{$t.Slug}}</code>.</p>
+      {{else}}<p class="empty">No benchmark results yet.</p>{{end}}
     {{end}}
     </section>
 

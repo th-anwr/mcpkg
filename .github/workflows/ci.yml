@@ -93,3 +93,55 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://mcpkg:mcpkg@localhost:5432/mcpkg_test?sslmode=disable
           E2E_NETWORK: "1"
+
+  # Tier-1 deploy gate (docs/BENCH_GATE.md): B0-B3 + B5 over a 12-tool
+  # known-answer fixture. Writes bench/gate.json, uploaded as an artifact and
+  # committed back to main, so deploy/aws/push.sh can require a green report
+  # for the exact GATE_SHA it is pushing. The gate commit does not re-trigger
+  # this job (message guard below).
+  bench-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'gate:'))
+    permissions:
+      contents: write
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mcpkg
+          POSTGRES_PASSWORD: mcpkg
+          POSTGRES_DB: mcpkg_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mcpkg -d mcpkg_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: run tier-1 gates (B0, B1, B2, B3, B5)
+        run: go test ./internal/bench -run TestGate -v -count=1
+        env:
+          TEST_DATABASE_URL: postgres://mcpkg:mcpkg@localhost:5432/mcpkg_test?sslmode=disable
+          GATE_SHA: ${{ github.sha }}
+      - name: upload gate report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: bench-gate-report
+          path: bench/gate.json
+          if-no-files-found: ignore
+      - name: commit gate report
+        if: success()
+        run: |
+          git config user.name "mcpkg-gate"
+          git config user.email "gate@mcpkg.invalid"
+          git add bench/gate.json
+          if git diff --cached --quiet; then
+            echo "gate report unchanged"
+          else
+            git commit -m "gate: bench/gate.json for ${{ github.sha }}"
+            git push origin HEAD:main
+          fi

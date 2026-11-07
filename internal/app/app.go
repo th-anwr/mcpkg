@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
+	"github.com/mcpkg/mcpkg/internal/bench"
 	"github.com/mcpkg/mcpkg/internal/config"
 	"github.com/mcpkg/mcpkg/internal/db"
 	"github.com/mcpkg/mcpkg/internal/discover"
@@ -83,17 +85,38 @@ func (a *App) SandboxRunner() sandbox.Runner {
 	return nil
 }
 
+// BenchRunner builds the benchmark scanner runner (nil when BENCH_ENABLED is off).
+func (a *App) BenchRunner() *bench.Runner {
+	if !a.Cfg.BenchEnabled {
+		return nil
+	}
+	return &bench.Runner{
+		HTTP:         a.HTTP,
+		ScorecardAPI: a.Cfg.ScorecardAPI,
+		OSVAPI:       a.Cfg.OSVAPI,
+		UserAgent:    a.Cfg.UserAgent,
+		Timeout:      time.Duration(a.Cfg.BenchTimeoutSec) * time.Second,
+		Log:          a.Log.With("component", "bench"),
+	}
+}
+
 // Runner builds the pipeline with every stage wired.
 func (a *App) Runner() *pipeline.Runner {
 	deps := &stages.Deps{Cfg: a.Cfg, HTTP: a.HTTP, Store: a.Store, Gates: a.Pipe.Gates, Pipe: a.Pipe, Log: a.Log}
 	model := &llm.Client{BaseURL: a.Cfg.LLMBaseURL, APIKey: a.Cfg.LLMAPIKey, Model: a.Cfg.LLMModel, JSONMode: a.Cfg.LLMJSONMode, HTTP: a.HTTP,
 		Log: a.Log.With("component", "llm")}
+	br := a.BenchRunner()
+	var benchScanners []bench.Scanner
+	if br != nil {
+		benchScanners = br.Scanners(strings.Split(a.Cfg.BenchScanners, ","))
+	}
 	st := map[string]pipeline.Stage{
 		"health":   &stages.Health{D: deps},
 		"security": &stages.Security{D: deps},
 		"smoke":    &stages.Smoke{D: deps, Runner: a.SandboxRunner(), AllowPrivate: a.AllowPrivateRemotes},
 		"enrich":   &stages.Enrich{D: deps, LLM: model},
 		"render":   &stages.Render{D: deps, Queue: a.Queue},
+		"bench":    &stages.Bench{D: deps, Runner: br, Scanners: benchScanners, Enabled: a.Cfg.BenchEnabled},
 	}
 	return &pipeline.Runner{Store: a.Store, Queue: a.Queue, Config: a.Pipe, Stages: st,
 		Hooks: pipeline.NewHooks(a.Pipe.Hooks), WorkerID: a.Cfg.WorkerID, Log: a.Log}

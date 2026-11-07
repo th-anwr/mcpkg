@@ -49,6 +49,13 @@ type Config struct {
 	SandboxMemory        string
 	SandboxCPUs          string
 
+	// Benchmarks stage (docs/BENCH_GATE.md). Off until the gate is green;
+	// the Benchmarks tab stays hidden without rows.
+	BenchEnabled    bool   // BENCH_ENABLED
+	BenchScanners   string // BENCH_SCANNERS comma list
+	BenchTimeoutSec int    // BENCH_TIMEOUT_SEC per scanner
+	BenchRepoDir    string // BENCH_REPO_DIR checkout cache for CLI scanners
+
 	PipelineFile  string
 	WorkerID      string
 	WorkDir       string
@@ -91,6 +98,11 @@ func Load() Config {
 		SandboxProxy:         env("SANDBOX_PROXY", "http://egress-proxy:3128"),
 		SandboxMemory:        env("SANDBOX_MEMORY", "1g"),
 		SandboxCPUs:          env("SANDBOX_CPUS", "1"),
+
+		BenchEnabled:    envBool("BENCH_ENABLED", false),
+		BenchScanners:   env("BENCH_SCANNERS", "scorecard,osv,mcp-conformance,gitleaks,trivy,semgrep,mcplint"),
+		BenchTimeoutSec: envInt("BENCH_TIMEOUT_SEC", 90),
+		BenchRepoDir:    os.Getenv("BENCH_REPO_DIR"),
 
 		PipelineFile:  env("PIPELINE_FILE", "pipeline.json"),
 		WorkerID:      env("WORKER_ID", hostname()),
@@ -148,6 +160,18 @@ func envFloat(key string, def float64) float64 {
 		return def
 	}
 	return f
+}
+
+func envInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }
 
 func hostname() string {

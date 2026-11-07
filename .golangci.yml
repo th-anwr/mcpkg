@@ -20,6 +20,7 @@ linters:
         - (*os.File).Close
         - (*database/sql.DB).Close
         - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
         - (*database/sql.Tx).Rollback
         - (*compress/gzip.Reader).Close
         - (*archive/zip.ReadCloser).Close

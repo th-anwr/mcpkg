@@ -79,6 +79,9 @@ func Default() Config {
 			"smoke":    {Enabled: true, Concurrency: 2, Batch: 1, TimeoutSec: 300, MaxAttempts: 2, Next: "enrich"},
 			"enrich":   {Enabled: true, Concurrency: 4, Batch: 1, TimeoutSec: 120, MaxAttempts: 3, Next: "render"},
 			"render":   {Enabled: true, Concurrency: 2, Batch: 25, TimeoutSec: 60, MaxAttempts: 3, Next: ""},
+			// Benchmarks run off the default chain: `mcpkg bench` enqueues and
+			// `mcpkg worker -stages bench` drains. Off until BENCH_ENABLED=1.
+			"bench": {Enabled: true, Concurrency: 1, Batch: 1, TimeoutSec: 360, MaxAttempts: 2, Next: ""},
 		},
 		Gates:   Gates{SkipHeavyIfArchived: true, StopOnMalicious: true, ReviewOnHighFindings: true, SkipUnchangedWithinDays: 30},
 		Recheck: Recheck{HealthEveryDays: 7},

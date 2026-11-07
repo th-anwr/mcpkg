@@ -71,6 +71,8 @@ func main() {
 		err = cmdServe(ctx, cfg, log, args)
 	case "enqueue":
 		err = cmdEnqueue(ctx, cfg, log, args)
+	case "bench":
+		err = cmdBench(ctx, cfg, log, args)
 	case "run":
 		err = cmdRun(ctx, cfg, log, args)
 	case "add":
@@ -106,6 +108,7 @@ Usage: mcpkg <command> [flags]
   scheduler                       periodic discovery + re-checks (run one per deployment)
   serve     [-addr :8080]         website, JSON API, /v0.1/servers, badges
   enqueue   -stage health (-all | -slug a,b | -status S | -smoke-status S | -min-stars N | -never-checked | -stale-days N) [-limit N]
+  bench     (-all | -slug a,b) [-limit N]   enqueue benchmark jobs (run "mcpkg worker -stages bench" with BENCH_ENABLED=1)
   run       -slug S [-from stage] run every stage for one tool now and print results
   add       <url>                 register a GitHub repo, npm/PyPI page or https MCP endpoint
   stats                           catalog + queue numbers
@@ -339,6 +342,35 @@ func cmdEnqueue(ctx context.Context, cfg config.Config, log *slog.Logger, args [
 	}
 	n, err := a.Queue.EnqueueMany(ctx, *stage, ids, time.Time{})
 	log.Info("enqueued", "stage", *stage, "matched", len(ids), "new_jobs", n)
+	return err
+}
+
+func cmdBench(ctx context.Context, cfg config.Config, log *slog.Logger, args []string) error {
+	fs := flag.NewFlagSet("bench", flag.ExitOnError)
+	all := fs.Bool("all", false, "every listed tool")
+	slugs := fs.String("slug", "", "comma-separated slugs")
+	limit := fs.Int("limit", 0, "max tools")
+	_ = fs.Parse(args)
+	a, err := open(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	if !cfg.BenchEnabled {
+		return errors.New("BENCH_ENABLED=1 is required to run benchmarks (docs/BENCH_GATE.md)")
+	}
+	f := store.Filter{All: true, Limit: *limit}
+	if *slugs != "" {
+		f = store.Filter{Slugs: strings.Split(*slugs, ","), Limit: *limit}
+	} else if !*all {
+		// Default: only tools that were never benchmarked.
+		return errors.New("refusing to enqueue every tool: pass -all or -slug a,b (docs/BENCH_GATE.md)")
+	}
+	ids, err := a.Store.SelectIDs(ctx, f)
+	if err != nil {
+		return err
+	}
+	n, err := a.Queue.EnqueueMany(ctx, "bench", ids, time.Time{})
+	log.Info("bench enqueued", "matched", len(ids), "new_jobs", n)
 	return err
 }
 

@@ -6,7 +6,8 @@
     "security": { "enabled": true, "concurrency": 2, "batch": 1,  "timeout_sec": 300, "max_attempts": 3, "next": "smoke" },
     "smoke":    { "enabled": true, "concurrency": 2, "batch": 1,  "timeout_sec": 360, "max_attempts": 2, "next": "enrich" },
     "enrich":   { "enabled": true, "concurrency": 4, "batch": 1,  "timeout_sec": 120, "max_attempts": 3, "next": "render" },
-    "render":   { "enabled": true, "concurrency": 2, "batch": 25, "timeout_sec": 60,  "max_attempts": 3, "next": "" }
+    "render":   { "enabled": true, "concurrency": 2, "batch": 25, "timeout_sec": 60,  "max_attempts": 3, "next": "" },
+    "bench":    { "enabled": true, "concurrency": 1, "batch": 1,  "timeout_sec": 360, "max_attempts": 2, "next": "" }
   },
   "gates": {
     "skip_heavy_if_archived": true,

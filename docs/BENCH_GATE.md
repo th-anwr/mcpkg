@@ -39,9 +39,10 @@ needs.
 
 - One artifact per commit: `bench/gate.json`.
 - Shape: `{ "sha": "...", "tier": 1, "gates": [{ "id": "B0", "pass": true, "value": ..., "threshold": ..., "evidence": "path" }] }`.
-- CI job `bench-gate` uploads it and fails on any red gate.
-- `deploy/aws/push.sh` refuses to run unless a green report exists for the commit it is
-  pushing (`GATE_SHA` must equal `git rev-parse HEAD`). No report → no deploy.
+- CI job `bench-gate` runs the tier-1 gates on every `main` commit, fails on any
+  red gate, uploads the report as an artifact, and commits it back to `main`.
+- `deploy/aws/push.sh` refuses to run unless `GATE_SHA=<sha>` names a commit whose
+  committed report is green. No report → no deploy.
 
 ## Stage contract (what "writing it" must satisfy)
 

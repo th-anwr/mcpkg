@@ -646,3 +646,111 @@ func (s *Store) RecentSubmissions(ctx context.Context, clientKey string) (int, e
 	err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM submissions WHERE client_key=$1 AND created_at > now() - interval '1 hour'`, clientKey).Scan(&n)
 	return n, err
 }
+
+// BenchmarkRow is one tool_benchmarks row, served to the Benchmarks tab and
+// the /api/bench endpoint.
+type BenchmarkRow struct {
+	Scanner        string
+	ScannerVersion string
+	ImageDigest    string
+	RanAt          time.Time
+	DurationMs     int64
+	ExitCode       int
+	Verdict        string
+	SkipReason     string
+	Raw            json.RawMessage
+	RunID          int64
+}
+
+// SaveBenchmarks appends rows for a run. Worker runs (runID 0) replace the
+// tool's previous unnumbered rows first, so re-running a tool never duplicates
+// results (gate B3); numbered gate runs keep their history.
+func (s *Store) SaveBenchmarks(ctx context.Context, toolID int64, runID int64, rows []BenchmarkRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		s.warn("save_benchmarks.begin", err)
+		return err
+	}
+	defer tx.Rollback()
+	if runID == 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM tool_benchmarks WHERE tool_id=$1 AND run_id IS NULL`, toolID); err != nil {
+			s.warn("save_benchmarks.delete", err)
+			return err
+		}
+	}
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO tool_benchmarks
+		(tool_id, scanner, scanner_version, image_digest, ran_at, duration_ms, exit_code, verdict, skip_reason, raw, run_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)`)
+	if err != nil {
+		s.warn("save_benchmarks.prepare", err)
+		return err
+	}
+	defer stmt.Close()
+	for _, r := range rows {
+		var raw any
+		if len(r.Raw) > 0 {
+			raw = string(r.Raw)
+		}
+		if _, err := stmt.ExecContext(ctx, toolID, r.Scanner, r.ScannerVersion, r.ImageDigest, r.RanAt,
+			r.DurationMs, r.ExitCode, r.Verdict, r.SkipReason, raw, nullInt(runID)); err != nil {
+			s.warn("save_benchmarks.insert", err)
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		s.warn("save_benchmarks.commit", err)
+		return err
+	}
+	return nil
+}
+
+func nullInt(v int64) any {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+
+// BenchmarksForTool returns the newest result per scanner for a tool.
+func (s *Store) BenchmarksForTool(ctx context.Context, toolID int64) ([]BenchmarkRow, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT DISTINCT ON (scanner)
+		scanner, scanner_version, image_digest, ran_at, duration_ms, exit_code, verdict, skip_reason, coalesce(raw::text,''), coalesce(run_id,0)
+		FROM tool_benchmarks WHERE tool_id=$1 ORDER BY scanner, ran_at DESC`, toolID)
+	if err != nil {
+		s.warn("benchmarks_for_tool", err)
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BenchmarkRow
+	for rows.Next() {
+		var r BenchmarkRow
+		var raw string
+		if err := rows.Scan(&r.Scanner, &r.ScannerVersion, &r.ImageDigest, &r.RanAt, &r.DurationMs,
+			&r.ExitCode, &r.Verdict, &r.SkipReason, &raw, &r.RunID); err != nil {
+			s.warn("benchmarks_for_tool.scan", err)
+			return nil, err
+		}
+		r.Raw = json.RawMessage(raw)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// StartBenchRun opens a gate/report run row.
+func (s *Store) StartBenchRun(ctx context.Context, sha string) (int64, error) {
+	var id int64
+	err := s.DB.QueryRowContext(ctx, `INSERT INTO bench_runs (sha) VALUES ($1) RETURNING id`, sha).Scan(&id)
+	s.warn("start_bench_run", err)
+	return id, err
+}
+
+// FinishBenchRun stores the gate report.
+func (s *Store) FinishBenchRun(ctx context.Context, id int64, gate any) error {
+	b, _ := json.Marshal(gate)
+	_, err := s.DB.ExecContext(ctx, `UPDATE bench_runs SET finished_at=now(), gate=$2::jsonb WHERE id=$1`, id, string(b))
+	s.warn("finish_bench_run", err)
+	return err
+}

@@ -76,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /tool/{slug}/install.md", s.installMD)
 	mux.HandleFunc("GET /api/tools/{slug}/manifest.json", s.manifestJSON)
 	mux.HandleFunc("GET /api/tools/{slug}", s.toolJSON)
+	mux.HandleFunc("GET /api/bench/{slug}", s.benchJSON)
 	mux.HandleFunc("GET /api/search", s.searchJSON)
 	mux.HandleFunc("GET /api/stats", s.statsJSON)
 	mux.HandleFunc("GET /v0.1/servers", s.subregistryList)
@@ -158,6 +159,7 @@ type pageData struct {
 	Runs       []store.CheckRun
 	Tab        string
 	Method     *model.InstallMethod
+	Benchmarks []store.BenchmarkRow
 
 	Results    []*model.Tool
 	Total      int
@@ -303,7 +305,7 @@ func (s *Server) tool(w http.ResponseWriter, r *http.Request) {
 	d.Tool, d.Canonical = t, s.Cfg.SiteURL+"/tool/"+t.Slug
 	d.Tab = r.URL.Query().Get("tab")
 	switch d.Tab {
-	case "tools", "install", "health":
+	case "tools", "install", "health", "benchmarks":
 	default:
 		d.Tab = "readme"
 	}
@@ -315,6 +317,9 @@ func (s *Server) tool(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.Tab == "health" {
 		d.Runs, _ = s.Store.CheckRuns(r.Context(), t.ID, 30)
+	}
+	if d.Tab == "benchmarks" {
+		d.Benchmarks, _ = s.Store.BenchmarksForTool(r.Context(), t.ID)
 	}
 	s.render(w, "tool", d)
 }
