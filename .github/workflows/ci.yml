@@ -19,8 +19,8 @@ jobs:
           --health-cmd "pg_isready -U mcpkg -d mcpkg_test"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - name: gofmt
@@ -42,10 +42,11 @@ jobs:
   docker:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: app image
-        run: docker build -f deploy/Dockerfile -t mcpkg:ci .
+      - uses: actions/checkout@v6
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: app image (amd64 + arm64; the core box is arm64)
+        run: docker buildx build --platform linux/amd64,linux/arm64 -f deploy/Dockerfile .
       - name: sandbox runner image
         run: docker build -f sandbox/runner.Dockerfile -t mcpkg-runner:ci sandbox
       - name: egress proxy image

@@ -191,3 +191,29 @@ Earlier runs failed on a type mismatch in `internal/logx/log.go` (int64 vs int i
 | 23 | Low | `actions/checkout@v4`, `setup-go@v5`, `setup-buildx-action@v3` target Node 20, now deprecated on runners (warning only). | Bump to the current majors when convenient. |
 
 **Rule**: `squid -k parse` already runs in the proxy Dockerfile, which is what caught this. Keep it, and add the three Docker builds to the required checks on `main` once branch protection is on.
+
+## 9. Fix round (2026-11-07, night)
+
+| # | Status | What changed |
+|---|---|---|
+| 1 | Open (planned) | Basic auth stays until GitHub sign-in (section 3, order of work step 1). `DEPLOY.md` now warns that the password is sent in clear text until TLS. |
+| 2 | Fixed | `deploy/Dockerfile` cross-compiles Go on `$BUILDPLATFORM` for `$TARGETARCH`. CI builds the app image for amd64 + arm64. Docker CLI and osv-scanner were already pinned. |
+| 3 | Fixed | Compose sets `LOG_DIR=-` for every app service (the `*env` anchor). The image defaults to `LOG_DIR=-`. `make-env.sh` and `.env.example` include it. |
+| 4 | Fixed | Services that set their own `environment:` merge `*env`. `worker-heavy` documents that its `volumes:` replaces the anchor's. |
+| 5 | Fixed | The image runs as uid 10001. Only `worker-heavy` runs as root (`user: root`, because it needs the Docker socket), and only on spot workers. |
+| 6 | Fixed | Caddy sends HSTS only on HTTPS responses (`@https protocol https`). The compose `DOMAIN` default is now `:80`. |
+| 7 | Already done | `bootstrap.sh` sets `DB_BIND` from IMDS `local-ipv4`, and the security group allows 5432 only from the group. Now documented in `DEPLOY.md`. |
+| 8 | Fixed | The license hook uses `"on_error": "stop"`. The valid values are `continue` and `stop`, not `fail`. |
+| 9 | Fixed | Already in place: a cap of 10 per client per hour, and dedupe via identity merge. New: a site-wide cap of 300 per hour, an 8 KiB form limit, and a 500-character URL limit. The client key now uses the last `X-Forwarded-For` hop (set by Caddy), because earlier hops can be forged. |
+| 10 | Partly | `ci.yml` already existed. Still to add: `golangci-lint`, `gosec` and the weekly `E2E_NETWORK` job. |
+| 11 | Fixed | Search rows, the tool header and the sidebar score show "checked N ago", plus a `stale` tag after 14 days (two missed weekly re-checks). |
+| 14 | Fixed | `httpx` logs Debug for each request (host, path, status, ms, attempt; no query strings) and Warn on rate limits. `queue` logs Info for retries and deferrals and Warn for dead jobs. The Docker sandbox logs Info for install, start and stop (image, runtime, exit code, ms). The runner logs one `stage done` line per tool (stage, tool, job, decision, ms, notes) and the stage error once. |
+| 15 | Fixed | `config.Validate` refuses to start when `SITE_URL` is https and `DATABASE_URL` is the development default. Covered by a unit test. |
+| 16 | Fixed | New `release.yml`: a `vX.Y.Z` tag pushes the images to GHCR, tagged with the version and `sha-…`. Set `MCPKG_IMAGE` in `.env` and `bootstrap.sh` pulls instead of building. Docker Engine is pinned (`DOCKER_VERSION=28.5`, falls back to the latest). |
+| 18 | Fixed | CSP `img-src` allows only GitHub raw/user-content, shields.io, badge.fury.io, badgen and codecov. |
+| 19 | Not an issue | `ADMIN_PASS` and `PG_PASS` are shell variables in `make-env.sh`. They are not written to `.env`. |
+| 21 | Fixed | Removed `registry.npmjs.org` from the squid ACL (already covered by `.npmjs.org`). |
+| 22 | Fixed | Added `crates.io`, `index.crates.io` and `static.crates.io`. The smoke stage still skips Rust crates (planned for Phase 3). |
+| 23 | Fixed | Bumped to `checkout@v6`, `setup-go@v6`, `setup-buildx-action@v4` and `setup-qemu-action@v4`. |
+
+Sections 3–6 are feature work and are not in this round: GitHub sign-in and claims, the metadata stage and npm-style tabs, benchmarks.

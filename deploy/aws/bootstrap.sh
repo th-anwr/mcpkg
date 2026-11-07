@@ -5,7 +5,10 @@
 #   sudo ROLE=core   bash /opt/mcpkg/deploy/aws/bootstrap.sh   # db + web + scheduler + light worker
 #   sudo ROLE=worker bash /opt/mcpkg/deploy/aws/bootstrap.sh   # security + smoke worker only
 #
-# Optional: REPO_URL (git-clone/pull instead of push.sh), WITH_GVISOR=1, HEAVY_ON_CORE=0
+# Optional: REPO_URL (git-clone/pull instead of push.sh), WITH_GVISOR=1, HEAVY_ON_CORE=0,
+#           DOCKER_VERSION=28.5 (pinned Docker Engine; falls back to the latest if unavailable)
+# Prebuilt images: set MCPKG_IMAGE (and for workers MCPKG_PROXY_IMAGE, SANDBOX_IMAGE) in .env to
+# pull tagged images from GHCR (built by .github/workflows/release.yml) instead of building here.
 set -euo pipefail
 
 ROLE="${ROLE:-core}"
@@ -13,6 +16,7 @@ REPO_URL="${REPO_URL:-}"
 APP_DIR="${APP_DIR:-/opt/mcpkg}"
 WITH_GVISOR="${WITH_GVISOR:-1}"
 HEAVY_ON_CORE="${HEAVY_ON_CORE:-0}"
+DOCKER_VERSION="${DOCKER_VERSION:-28.5}"
 case "$ROLE" in core|worker) ;; *) echo "unknown ROLE=$ROLE" >&2; exit 2 ;; esac
 
 export DEBIAN_FRONTEND=noninteractive
@@ -26,7 +30,11 @@ apt-get install -y -qq --no-install-recommends ca-certificates curl git gnupg >/
 
 if ! command -v docker >/dev/null; then
   step "installing Docker"
-  curl -fsSL https://get.docker.com | sh
+  curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+  sh /tmp/get-docker.sh --version "$DOCKER_VERSION" || {
+    echo "!! Docker $DOCKER_VERSION not available; installing the latest release" >&2
+    sh /tmp/get-docker.sh
+  }
 fi
 systemctl enable --now docker >/dev/null
 
@@ -71,13 +79,26 @@ if [ "$ROLE" = "core" ] && ! grep -qE '^DB_BIND=' .env; then
 fi
 
 COMPOSE="docker compose -f deploy/docker-compose.yml --env-file .env"
-step "building images (first time: several minutes)"
-if [ "$ROLE" = "core" ]; then
-  $COMPOSE build
-fi
-if [ "$ROLE" = "worker" ] || [ "$HEAVY_ON_CORE" = "1" ]; then
-  $COMPOSE --profile heavy build worker-heavy egress-proxy
-  docker build -q -f sandbox/runner.Dockerfile -t mcpkg-runner:latest sandbox >/dev/null
+envget() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- || true; }
+HEAVY=0; { [ "$ROLE" = "worker" ] || [ "$HEAVY_ON_CORE" = "1" ]; } && HEAVY=1
+if [ -n "$(envget MCPKG_IMAGE)" ]; then
+  # Prebuilt, tagged images (no Go/apt build on a 2 GB box). Never use :latest in production.
+  step "pulling images $(envget MCPKG_IMAGE)"
+  if [ "$ROLE" = "core" ]; then $COMPOSE pull; fi
+  if [ "$HEAVY" = "1" ]; then
+    $COMPOSE --profile heavy pull worker-heavy egress-proxy
+    RUNNER="$(envget SANDBOX_IMAGE)"
+    if [[ "$RUNNER" == */* ]]; then docker pull -q "$RUNNER" >/dev/null; else docker build -q -f sandbox/runner.Dockerfile -t mcpkg-runner:latest sandbox >/dev/null; fi
+  fi
+else
+  step "building images (first time: several minutes)"
+  if [ "$ROLE" = "core" ]; then
+    $COMPOSE build
+  fi
+  if [ "$HEAVY" = "1" ]; then
+    $COMPOSE --profile heavy build worker-heavy egress-proxy
+    docker build -q -f sandbox/runner.Dockerfile -t mcpkg-runner:latest sandbox >/dev/null
+  fi
 fi
 
 step "starting $ROLE services"

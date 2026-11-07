@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -24,6 +25,7 @@ type Client struct {
 	UserAgent string
 	MaxBody   int64
 	Retries   int
+	Log       *slog.Logger // optional: Debug per request, Warn on rate limits
 
 	mu       sync.Mutex
 	nextSlot map[string]time.Time
@@ -43,6 +45,12 @@ func New(userAgent string) *Client {
 			"pypi.org":       50 * time.Millisecond,
 			"api.github.com": 50 * time.Millisecond,
 		},
+	}
+}
+
+func (c *Client) debug(msg string, args ...any) {
+	if c.Log != nil {
+		c.Log.Debug(msg, args...)
 	}
 }
 
@@ -122,8 +130,10 @@ func (c *Client) Do(ctx context.Context, r Request) ([]byte, http.Header, error)
 		for k, v := range r.Header {
 			req.Header.Set(k, v)
 		}
+		start := time.Now()
 		resp, err := c.HTTP.Do(req)
 		if err != nil {
+			c.debug("http error", "method", r.Method, "host", u.Host, "path", u.Path, "ms", time.Since(start).Milliseconds(), "attempt", attempt, "err", err)
 			lastErr = err
 			if ctx.Err() != nil {
 				return nil, nil, ctx.Err()
@@ -138,6 +148,7 @@ func (c *Client) Do(ctx context.Context, r Request) ([]byte, http.Header, error)
 			sleep(ctx, backoff(attempt))
 			continue
 		}
+		c.debug("http", "method", r.Method, "host", u.Host, "path", u.Path, "status", resp.StatusCode, "ms", time.Since(start).Milliseconds(), "attempt", attempt)
 		if int64(len(data)) > maxBody {
 			return nil, resp.Header, fmt.Errorf("response from %s exceeds %d bytes", u.Host, maxBody)
 		}
@@ -147,6 +158,9 @@ func (c *Client) Do(ctx context.Context, r Request) ([]byte, http.Header, error)
 		herr := &HTTPError{Status: resp.StatusCode, URL: r.URL, Body: string(data)}
 		// Rate limits: surface as ErrRateLimited so the queue can retry later without burning attempts.
 		if until, limited := rateLimitedUntil(resp); limited {
+			if c.Log != nil {
+				c.Log.Warn("rate limited", "host", u.Host, "status", resp.StatusCode, "until", until.UTC().Format(time.RFC3339))
+			}
 			if time.Until(until) < 90*time.Second && attempt < c.Retries {
 				sleep(ctx, time.Until(until)+time.Second)
 				continue

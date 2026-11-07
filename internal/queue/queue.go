@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
 	"time"
 )
@@ -25,7 +27,19 @@ type Job struct {
 }
 
 // Queue wraps the jobs table.
-type Queue struct{ DB *sql.DB }
+type Queue struct {
+	DB  *sql.DB
+	Log *slog.Logger // optional: retries and dead jobs are logged here
+}
+
+func (q *Queue) log() *slog.Logger {
+	if q.Log != nil {
+		return q.Log
+	}
+	return discard
+}
+
+var discard = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 // New returns a queue on the given connection.
 func New(db *sql.DB) *Queue { return &Queue{DB: db} }
@@ -116,10 +130,12 @@ func (q *Queue) Fail(ctx context.Context, j Job, cause error) error {
 		}
 	}
 	if j.Attempts >= j.MaxAttempts {
+		q.log().Warn("job dead", "stage", j.Stage, "tool_id", j.ToolID, "job", j.ID, "attempts", j.Attempts, "err", msg)
 		_, err := q.DB.ExecContext(ctx, `UPDATE jobs SET state='dead', last_error=$2, locked_by=NULL, locked_until=NULL, updated_at=now() WHERE id=$1`, j.ID, msg)
 		return err
 	}
 	delay := Backoff(j.Attempts)
+	q.log().Info("job retry", "stage", j.Stage, "tool_id", j.ToolID, "job", j.ID, "attempt", j.Attempts, "in", delay.Round(time.Second).String())
 	_, err := q.DB.ExecContext(ctx, `
 		UPDATE jobs SET state='queued', last_error=$2, locked_by=NULL, locked_until=NULL,
 		       run_after=now() + make_interval(secs => $3), updated_at=now()
@@ -129,6 +145,7 @@ func (q *Queue) Fail(ctx context.Context, j Job, cause error) error {
 
 // RetryAfter re-queues a job without counting the attempt (e.g. rate limited).
 func (q *Queue) RetryAfter(ctx context.Context, j Job, d time.Duration, reason string) error {
+	q.log().Info("job deferred", "stage", j.Stage, "tool_id", j.ToolID, "job", j.ID, "in", d.Round(time.Second).String(), "reason", reason)
 	_, err := q.DB.ExecContext(ctx, `
 		UPDATE jobs SET state='queued', attempts=GREATEST(attempts-1,0), last_error=$2, locked_by=NULL, locked_until=NULL,
 		       run_after=now() + make_interval(secs => $3), updated_at=now()

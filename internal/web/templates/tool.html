@@ -8,7 +8,7 @@
     <div class="pkg-meta">
       <code class="pkg-id">{{$t.Name}}</code>
       <span aria-hidden="true">·</span>
-      {{if $t.VerifiedAt}}<span>Checked {{ago $t.VerifiedAt}}</span>{{else}}<span>Checks in progress</span>{{end}}
+      {{if $t.VerifiedAt}}<span>Checked {{ago $t.VerifiedAt}}</span>{{if stale $t.VerifiedAt}} <span class="tag warn-tag" title="Not re-checked recently; results may be out of date">stale</span>{{end}}{{else}}<span>Checks in progress</span>{{end}}
       {{if $t.PublishedAt}}<span aria-hidden="true">·</span><span>Published {{ago $t.PublishedAt}}</span>{{end}}
     </div>
     {{with $t.Summary}}<p class="pkg-summary">{{.}}</p>{{end}}
@@ -172,6 +172,7 @@
         <h3>Trust score</h3>
         {{if $t.Score}}
         <div class="mini-score"><span class="g {{gradeClass $t.Score.Grade}}">{{$t.Score.Grade}}</span><span><b>{{$t.Score.Total}}</b>/100</span></div>
+        {{if $t.VerifiedAt}}<p class="fineprint">Checked {{ago $t.VerifiedAt}}{{if stale $t.VerifiedAt}} · <span class="tag warn-tag">stale</span>{{end}}</p>{{end}}
         <div class="mini-bars">
           <div><span>Maintenance</span><b class="t"><i style="width: {{pct $t.Score.Maintenance}}%"></i></b></div>
           <div><span>Security</span><b class="t"><i style="width: {{pct $t.Score.Security}}%"></i></b></div>

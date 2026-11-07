@@ -3,10 +3,13 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mcpkg/mcpkg/internal/launch"
 )
@@ -19,6 +22,25 @@ type DockerRunner struct {
 	Proxy         string // http://egress-proxy:3128
 	Memory        string
 	CPUs          string
+	Log           *slog.Logger // optional: container lifecycle
+}
+
+func (d *DockerRunner) info(msg string, args ...any) {
+	if d.Log != nil {
+		d.Log.Info(msg, append([]any{"image", d.Image, "runtime", d.Name()}, args...)...)
+	}
+}
+
+// exitCode is the container's exit status (-1 when it did not run).
+func exitCode(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	if err != nil {
+		return -1
+	}
+	return 0
 }
 
 // Name implements Runner.
@@ -128,7 +150,9 @@ func (d *DockerRunner) Install(ctx context.Context, job Job) (string, string, er
 		}
 		return "", out, nil
 	}
+	start := time.Now()
 	out, err := run(ctx, "docker", d.InstallArgs(job), nil, "")
+	d.info("sandbox install", "job", job.ID, "package", job.Package, "kind", job.Kind, "exit", exitCode(err), "ms", time.Since(start).Milliseconds())
 	if err != nil {
 		if infraProblem(out) {
 			return "", out, fmt.Errorf("%w: %v: %s", ErrInfra, err, tail(out, 300))
@@ -160,6 +184,8 @@ func (d *DockerRunner) Start(ctx context.Context, job Job, bin string) (*Process
 		return nil, fmt.Errorf("%w: %v", ErrInfra, err)
 	}
 	name := "mcpkg-run-" + job.ID
+	d.info("sandbox start", "job", job.ID, "container", name, "bin", bin)
+	started := time.Now()
 	shown := bin
 	if job.Kind == "oci" {
 		shown = "docker run -i " + job.Package
@@ -167,7 +193,11 @@ func (d *DockerRunner) Start(ctx context.Context, job Job, bin string) (*Process
 	return &Process{
 		Stdin: stdin, Stdout: stdout, stderr: stderr, Display: display(shown, job.Args),
 		// Killing the docker CLI does not stop the container; remove it explicitly.
-		stop: func() { _ = exec.Command("docker", "rm", "-f", name).Run(); _ = cmd.Process.Kill() },
+		stop: func() {
+			_ = exec.Command("docker", "rm", "-f", name).Run()
+			_ = cmd.Process.Kill()
+			d.info("sandbox stop", "job", job.ID, "container", name, "ms", time.Since(started).Milliseconds())
+		},
 		wait: cmd.Wait,
 	}, nil
 }

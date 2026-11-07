@@ -23,7 +23,7 @@
       "command": ["python3", "hooks/examples/require_license.py"],
       "timeout_sec": 10,
       "enabled": false,
-      "on_error": "continue"
+      "on_error": "stop"
     }
   ]
 }

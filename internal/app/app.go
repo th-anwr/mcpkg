@@ -51,7 +51,11 @@ func Open(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error
 
 // New builds an App from an existing connection.
 func New(cfg config.Config, log *slog.Logger, conn *sql.DB, pipe pipeline.Config) *App {
-	return &App{Cfg: cfg, Log: log, DB: conn, Store: store.New(conn), Queue: queue.New(conn), HTTP: httpx.New(cfg.UserAgent), Pipe: pipe}
+	q := queue.New(conn)
+	q.Log = log.With("component", "queue")
+	h := httpx.New(cfg.UserAgent)
+	h.Log = log.With("component", "http")
+	return &App{Cfg: cfg, Log: log, DB: conn, Store: store.New(conn), Queue: q, HTTP: h, Pipe: pipe}
 }
 
 // Discoverer returns the candidate merger.
@@ -69,7 +73,7 @@ func (a *App) SandboxRunner() sandbox.Runner {
 	switch a.Cfg.Sandbox {
 	case "docker":
 		return &sandbox.DockerRunner{Image: a.Cfg.SandboxImage, Runtime: a.Cfg.SandboxRuntime, EgressNetwork: a.Cfg.SandboxEgressNetwork,
-			Proxy: a.Cfg.SandboxProxy, Memory: a.Cfg.SandboxMemory, CPUs: a.Cfg.SandboxCPUs}
+			Proxy: a.Cfg.SandboxProxy, Memory: a.Cfg.SandboxMemory, CPUs: a.Cfg.SandboxCPUs, Log: a.Log.With("component", "sandbox")}
 	case "process":
 		a.Log.Warn("SANDBOX=process runs untrusted servers directly on this machine: use only for local development")
 		return &sandbox.ProcessRunner{BaseDir: a.Cfg.WorkDir}

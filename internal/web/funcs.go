@@ -12,10 +12,14 @@ import (
 	"github.com/mcpkg/mcpkg/internal/model"
 )
 
+// StaleAfter is when a check result is shown as out of date (two missed weekly re-checks).
+const StaleAfter = 14 * 24 * time.Hour
+
 func funcs() template.FuncMap {
 	return template.FuncMap{
-		"ago":  ago,
-		"agoT": func(t time.Time) string { return ago(&t) },
+		"ago":   ago,
+		"stale": func(t *time.Time) bool { return t != nil && time.Since(*t) > StaleAfter },
+		"agoT":  func(t time.Time) string { return ago(&t) },
 		"f1": func(f *float64) string {
 			if f == nil {
 				return "—"

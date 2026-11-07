@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"time"
 
@@ -179,6 +180,7 @@ func (r *Runner) process(ctx context.Context, st Stage, sc StageConfig, jobs []q
 	if len(tools) == 0 {
 		return
 	}
+	r.Log.Debug("claimed", "stage", st.Name(), "jobs", len(jobs), "worker", worker)
 	sctx, cancel := context.WithTimeout(ctx, sc.Timeout())
 	start := time.Now()
 	results := safeRun(sctx, st, tools)
@@ -189,6 +191,7 @@ func (r *Runner) process(ctx context.Context, st Stage, sc StageConfig, jobs []q
 		res := results[i]
 		if err := r.Finish(context.Background(), st.Name(), t, res, int(elapsed.Milliseconds())/len(tools), worker); err != nil {
 			if rl, ok := queue.AsRateLimited(err); ok {
+				r.Log.Warn("rate limited, deferring", "stage", st.Name(), "tool", t.Slug, "job", j.ID, "until", rl.Until.UTC().Format(time.RFC3339))
 				_ = r.Queue.RetryAfter(context.Background(), j, time.Until(rl.Until)+time.Minute, err.Error())
 				continue
 			}
@@ -196,6 +199,7 @@ func (r *Runner) process(ctx context.Context, st Stage, sc StageConfig, jobs []q
 			_ = r.Queue.Fail(context.Background(), j, err)
 			continue
 		}
+		r.Log.Info("stage done", "stage", st.Name(), "tool", t.Slug, "job", j.ID, "decision", string(res.Decision), "ms", elapsed.Milliseconds()/int64(len(tools)), "notes", strings.Join(res.Notes, "; "))
 		_ = r.Queue.Complete(context.Background(), j.ID)
 	}
 }

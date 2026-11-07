@@ -8,6 +8,7 @@
     <div class="row-meta">
       {{with .Version}}<span>v{{.}}</span>{{end}}
       {{if .LastCommitAt}}<span>updated {{ago .LastCommitAt}}</span>{{end}}
+      {{if .VerifiedAt}}<span>checked {{ago .VerifiedAt}}{{if stale .VerifiedAt}} <span class="tag warn-tag">stale</span>{{end}}</span>{{end}}
       {{if .Stars}}<span>★ {{num .Stars}}</span>{{end}}
       {{if .WeeklyDownloads}}<span>↓ {{num .WeeklyDownloads}}/wk</span>{{end}}
       {{range .Categories}}<span class="tag">{{catLabel .}}</span>{{end}}
