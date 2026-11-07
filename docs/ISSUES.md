@@ -266,3 +266,138 @@ CI on `main` (merge `a17624b`, run 42387690960): the `go` job and the `docker` j
 | — | New | **Tier-1 deploy gate**: CI job `bench-gate` runs B0 (schema/provenance), B1 (no silent gaps), B2 (12-tool known-answer fixture, exact verdicts), B3 (determinism) and B5 (stage safety invariants) over fake upstreams, writes `bench/gate.json`, uploads it as an artifact and commits it to `main` (commit titles `gate:`; the job skips itself on those). `deploy/aws/push.sh` refuses to run without `GATE_SHA=<sha>` naming a commit whose report is green. |
 
 **Still open (T2 soak + feature work):** B6 (perf p95 targets, freeze after baseline), B7 (cost envelope), B8 (teardown/restore drill) — all measured on a prod-shaped stack before public launch; GitHub sign-in and claims (section 3); metadata stage and npm-style tabs (section 5); Code tab and Dependents (section 6); the Bench tab's UI pass against Mobbin references.
+
+## 12. Final-check dossier (round 4, complete — for independent review)
+
+Everything changed in this round, how it was verified, what is deliberately
+incomplete, and the exact deploy checklist. Written so a fresh reviewer can
+check each claim against `main` without replaying the session.
+
+### 12.1 How this round was executed
+
+- Model: `deepseek-v4-pro` @ `max` effort, `danger-full-access`, approvals `never`.
+- The dev laptop has no git/go/docker: Go 1.27.3 was installed from the official
+  zip (`%LOCALAPPDATA%\Programs\go`), golangci-lint v2.15.0 and gosec v2.30.0 via
+  `go install`. Commits were made through the GitHub git-data API (blob → tree →
+  commit → fast-forward `main`) with the owner's fine-grained PAT — no local git.
+- Every commit was pushed to `main` and CI-verified before the next one.
+
+### 12.2 Commit log (newest last)
+
+| Sha | Commit | CI result |
+|---|---|---|
+| `02b4d60` | docs: add benchmark gate spec (B0–B8 two-tier gate, blocks deploy) | run 42402675024 ✅ go, docker |
+| `884f237` | feat(log): structured logs for llm, scan, mcpclient, submit, store, process sandbox, sources (ISSUES #14) | run 42402675024 ✅ |
+| `9c9cdb7` | ci: golangci-lint + gosec gates, weekly E2E_NETWORK job, multi-arch sandbox images (ISSUES #10, #25) | run 42404993995 ✅ go, docker; e2e-network skipped (push) |
+| `42e99a1` | feat(bench): benchmark stage + Benchmarks tab + tier-1 gate (B0–B3,B5) + bench-gate CI job + push.sh enforcement | run 42405839690 ❌ go (template parse: `{{else if}}` after terminal `{{else}}`), ❌ bench-gate (report written to package cwd, dir missing) |
+| `bef5090` | fix: health/benchmarks tab chain and gate report directory | run 42406284300 ✅ go, ❌ bench-gate (B2 red: conformance refused loopback — SSRF guard was correct, fixture was wrong) |
+| `757f1b8` | fix(bench): conformance SSRF guard behind AllowPrivate (tests only) | run 42406680355 ✅ go, ❌ bench-gate (TestGate passed; bot commit step: `git add bench/gate.json` pathspec missing — cwd bug) |
+| `1f35954` | fix(bench): write gate report to repo root regardless of test cwd | run 42407038711 ✅ all; bot committed `0042a9a` (gate for `1f35954`) |
+| `d8a9938` | docs: round 4 status, deploy gate steps (GATE_SHA) in runbook | run 42407333705 ✅ go/docker, ❌ bench-gate (TestGate passed; bot push lost a fast-forward race) |
+| `7b34d02` | docs: refresh handoff with tier-1 gate status | bot committed `bbd14af` (gate for `7b34d02`) |
+| `f565958` | ci: gate bot rebases and retries push to avoid fast-forward races | run 42407633369 ✅ all; bot committed `ee847c2` |
+| `5cbfd1a` | deploy: push.sh resolves tag names for GATE_SHA | run 42408366782 ✅ go, docker, bench-gate; bot committed `e6960c9` |
+
+All three red bench-gate runs are fixed and the causes are recorded above so a
+reviewer can confirm the fix commit for each.
+
+### 12.3 File map
+
+**#14 logging** — `internal/llm/llm.go`, `internal/scan/scan.go`,
+`internal/scan/extract.go`, `internal/mcpclient/mcpclient.go`,
+`internal/mcpclient/http.go`, `internal/submit/submit.go`,
+`internal/store/store.go`, `internal/sandbox/process.go`,
+`internal/sources/{registry,npm,pypi,crates,github}.go`,
+`internal/app/app.go`, `internal/stages/{smoke,security}.go` (wiring).
+Lint-driven edits in the same round: `internal/httpx/httpx.go` (errcheck on
+`sleep`), `internal/web/server.go` (unconvert), `internal/sources/source.go`
+and `internal/store/store.go` (ST1020/ST1022 comment forms).
+
+**Benchmark stage (new)** — `internal/bench/bench.go` (Result schema v1 with
+provenance, verdict enum, enumerated skip reasons, scanners: `scorecard`, `osv`,
+`mcp-conformance`, CLI adapters), `internal/bench/bench_test.go` (repoSlug,
+Result.Valid, panic→error, SSRF-guard tests), `internal/bench/gate_test.go`
+(TestGate: B0/B1/B2/B3/B5 + `bench/gate.json` writer),
+`internal/stages/bench.go` (pipeline stage: Continue-only, no Fields — B5),
+`internal/db/migrations/003_benchmarks.sql` (`tool_benchmarks`,
+`bench_runs`), `bench/README.md`.
+
+**Benchmark stage (wiring/edits)** — `internal/store/store.go` (SaveBenchmarks
+with replace-on-rerun for run_id 0, BenchmarksForTool, Start/FinishBenchRun),
+`internal/config/config.go` (`BENCH_ENABLED`, `BENCH_SCANNERS`,
+`BENCH_TIMEOUT_SEC`, `BENCH_REPO_DIR`), `internal/pipeline/config.go` +
+`pipeline.json` (bench stage, off the default chain),
+`internal/app/app.go` (BenchRunner + stage wiring), `cmd/mcpkg/main.go`
+(`mcpkg bench`), `internal/web/server.go` + `internal/web/api.go` +
+`internal/web/templates/tool.html` (Benchmarks tab + `/api/bench/{slug}`),
+`.env.example`, `.github/workflows/ci.yml` (gates + e2e-network + bench-gate),
+`deploy/aws/push.sh`, `docs/{BENCH_GATE,DEPLOY,ISSUES}.md`, `HANDOFF.md`.
+
+### 12.4 Local verification performed
+
+| Check | Command | Result |
+|---|---|---|
+| Format | `gofmt -l .` | clean |
+| Build | `GOOS=linux GOARCH=amd64 go build ./...` | exit 0 |
+| Vet | `GOOS=linux GOARCH=amd64 go vet ./...` | exit 0 |
+| Lint | `golangci-lint v2.15.0 run ./...` (config `.golangci.yml` v2) | 0 issues |
+| SAST | `gosec v2.30.0 -severity=high -confidence=high ./internal/sandbox/... ./internal/launch/... ./internal/web/...` | 0 issues |
+| Test compile (Linux) | `GOOS=linux go test -c ./internal/bench ./internal/e2e` | exit 0 |
+
+Windows-only notes for the reviewer: `go test ./...` on Windows fails in
+`sandbox`/`stages`/`e2e` (`syscall.Setpgid` does not exist on Windows) and
+`pipeline` `TestScriptHook` (forks `hook.sh`) — pre-existing Linux-only code,
+not changed this round; CI runs on Linux and is green.
+
+### 12.5 Gate mechanics (how deploy is blocked)
+
+- `bench-gate` CI job: runs on every push to `main` unless the commit message
+  starts with `gate:` (loop guard), plus `workflow_dispatch`. Postgres service,
+  `GATE_SHA=<commit>`, `TestGate` writes `bench/gate.json` to the repo root,
+  uploads it as an artifact, then commits it back to `main` with a rebase+retry
+  (5 attempts) push. A red gate or a failed report commit = red job.
+- `deploy/aws/push.sh`: `GATE_SHA` is required (tag names resolved via
+  `git rev-parse` when git exists); the committed report must exist, be tier 1,
+  have matching `sha`, and every gate `pass: true` — otherwise it dies before
+  touching a box. No report → no deploy.
+- Each code commit therefore produces one extra `gate:` commit containing only
+  `bench/gate.json`; CI on those skips the gate job (go + docker still run).
+
+### 12.6 Deliberately incomplete (review these as accepted risk)
+
+1. **B4** (page/API truth) is implemented (tab + `/api/bench/{slug}` with
+   provenance) but not asserted inside `TestGate`; it is exercised indirectly
+   by the web and e2e page tests. A stricter B4 assertion is a good follow-up.
+2. Conformance covers remote endpoints only; stdio-only tools skip with an
+   enumerated reason (BENCH_GATE open decision 2 — skip, never silent).
+3. CLI scanners (`gitleaks`, `trivy`, `semgrep`, `mcplint`) report
+   `skip=scanner-unavailable` until `BENCH_REPO_DIR` checkout support exists.
+4. Scorecard is read from the API, not run locally (open decision 1).
+5. promptfoo red-team (top 500) is not built; `BENCH_ENABLED` defaults to false,
+   and the bench stage is off the default chain — nothing runs until ops opts in.
+6. **Tier-2 gates (B6 perf, B7 cost, B8 rollback drill) are not implemented** —
+   they gate *public launch*, not the first deploy (by design in BENCH_GATE.md).
+7. Branch protection on `main` was not verifiable with the PAT used (needs admin
+   scope). The rules say main is protected; confirm in repo settings.
+8. Security: `/admin` basic-auth password travels cleartext until TLS (issue 1);
+   site is HTTP on the IP until `DOMAIN` is set (issue 6); `web` must have no
+   `ports:` mapping so the XFF trust holds (issue 26). Check these on the box.
+
+### 12.7 Deploy checklist (what "ready" means)
+
+1. AWS: region us-east-1; quotas ≥2 on-demand vCPU and ≥8 spot vCPU; credits
+   remaining (plan assumes ~$114).
+2. Tag `v0.1.0` → `release.yml` builds `mcpkg`, `mcpkg-runner`,
+   `mcpkg-egress-proxy` for amd64+arm64 to GHCR. Put `MCPKG_IMAGE`,
+   `MCPKG_PROXY_IMAGE`, `SANDBOX_IMAGE` in `.env` and make the GHCR packages
+   public (or `docker login ghcr.io` on the boxes) so the 2 GB core pulls
+   instead of building (issue 16).
+3. CloudShell: clone/unzip, `./scripts/make-env.sh` (read-only GITHUB_TOKEN,
+   skip LLM tonight), then `GATE_SHA=v0.1.0 ./deploy/aws/push.sh core` and
+   `GATE_SHA=v0.1.0 ./deploy/aws/push.sh worker <ip>`.
+4. Expect first-real-run breakage (issue 2): apt mirrors, Docker static tgz
+   URL, osv-scanner download, arm64 paths. Fix → re-push by sha.
+5. Verify: `./deploy/aws/ssh.sh core sudo /opt/mcpkg/scripts/status.sh`; after
+   the first pass, `./deploy/aws/teardown.sh workers`.
+6. T2 soak (B6–B8) on a prod-shaped stack **before** DNS/public launch.
+7. Rotate the PAT that was used for these commits (it was shared in chat).
