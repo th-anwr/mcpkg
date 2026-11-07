@@ -18,6 +18,10 @@ cd "$REPO_ROOT"
 # the bench-gate CI job tested; the report itself is committed to main by that job.
 GATE_SHA="${GATE_SHA:-}"
 [ -n "$GATE_SHA" ] || die "set GATE_SHA=<commit sha> for the code you are deploying (docs/BENCH_GATE.md)"
+# A tag name (v0.1.0) is fine when git can resolve it to the commit sha.
+if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse "$GATE_SHA^{commit}" >/dev/null 2>&1; then
+  GATE_SHA="$(git -C "$REPO_ROOT" rev-parse "$GATE_SHA^{commit}")"
+fi
 [ -f bench/gate.json ] || die "bench/gate.json missing: run the bench-gate CI job for $GATE_SHA first"
 python3 - "$GATE_SHA" <<'PY'
 import json, sys
