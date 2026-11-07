@@ -14,6 +14,7 @@ Everything runs from **AWS CloudShell** in the browser: no installs, no GitHub r
    - Expiry: 90 days
    - Copy the token.
 5. **Code.** Download the latest `mcpkg.zip`.
+6. **Deploy gate.** Every `push.sh` run requires a green tier-1 benchmark report for the exact commit being deployed (see `docs/BENCH_GATE.md`): the `bench-gate` CI job writes `bench/gate.json` for every commit to `main` and commits it back. Before starting tonight, note the commit sha you are deploying and confirm its report is green (Actions → bench-gate job, or check that `bench/gate.json` on `main` has `"sha"` = your commit and every gate `"pass": true`). You will pass it as `GATE_SHA=<sha>` below; `push.sh` refuses to run without it.
 
 ## Tonight
 
@@ -53,8 +54,7 @@ It prints the IP.
 ### 4. Install and start it (10–15 min)
 
 ```bash
-./deploy/aws/push.sh core
-```
+GATE_SHA=<sha> ./deploy/aws/push.sh core```
 
 This copies the code and `.env`, installs Docker (pinned, `DOCKER_VERSION=28.5`), builds the images and starts the database, website, scheduler and light worker.
 
@@ -74,7 +74,7 @@ This copies the code and `.env`, installs Docker (pinned, `DOCKER_VERSION=28.5`)
 
 ```bash
 ./deploy/aws/launch.sh worker          # prints the worker IP
-./deploy/aws/push.sh worker <worker-ip>
+GATE_SHA=<sha> ./deploy/aws/push.sh worker <worker-ip>
 # repeat for a second worker (a second CloudShell tab works in parallel)
 ```
 
@@ -120,7 +120,7 @@ That's it for tonight. Running cost: about $0.60/day for the core box and about 
 - **Domain:**
   1. Point an A record at the core IP.
   2. In CloudShell, set `DOMAIN=yourdomain.com` and `SITE_URL=https://yourdomain.com` in `.env`.
-  3. Run `./deploy/aws/push.sh core`. Caddy gets the TLS certificate automatically.
+  3. Run `GATE_SHA=<sha> ./deploy/aws/push.sh core`. Caddy gets the TLS certificate automatically.
 - **LLM descriptions (Bedrock):**
   1. Enable an open-weight model in the Bedrock console and create a Bedrock API key.
   2. Set these in `.env`:
@@ -129,10 +129,10 @@ That's it for tonight. Running cost: about $0.60/day for the core box and about 
      LLM_API_KEY=<key>
      LLM_MODEL=openai.gpt-oss-20b
      ```
-  3. Run `./deploy/aws/push.sh core`.
+  3. Run `GATE_SHA=<sha> ./deploy/aws/push.sh core`.
   4. Test quality on 50 tools: `./deploy/aws/ssh.sh core sudo /opt/mcpkg/scripts/mcpkg.sh eval-llm -n 50`.
   5. Re-describe everything: `... mcpkg.sh enqueue -stage enrich -all`.
-- **Code changes:** edit in CloudShell (or upload a new zip), then `./deploy/aws/push.sh core` and `push.sh worker <ip>`. Pushing again is safe.
+- **Code changes:** edit in CloudShell (or upload a new zip), then `GATE_SHA=<sha> ./deploy/aws/push.sh core` and `push.sh worker <ip>`. Pushing again is safe.
 
 ## Troubleshooting
 
