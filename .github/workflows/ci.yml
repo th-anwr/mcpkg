@@ -141,7 +141,17 @@ jobs:
           git add bench/gate.json
           if git diff --cached --quiet; then
             echo "gate report unchanged"
-          else
-            git commit -m "gate: bench/gate.json for ${{ github.sha }}"
-            git push origin HEAD:main
+            exit 0
           fi
+          git commit -m "gate: bench/gate.json for ${{ github.sha }}"
+          # main may have moved (other pushes landed while this job ran):
+          # rebase on top and retry a few times instead of failing the gate.
+          for i in 1 2 3 4 5; do
+            git fetch origin main
+            if git rebase origin/main && git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "gate report push failed after retries" >&2
+          exit 1
