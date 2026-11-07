@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -294,10 +295,12 @@ func TestGate(t *testing.T) {
 		"gates":   gates,
 	}
 	b, _ := json.MarshalIndent(report, "", "  ")
-	if err := os.MkdirAll("bench", 0o755); err != nil {
+	// go test runs with the package dir as cwd, so walk up to the repo root.
+	out := filepath.Join("..", "..", "bench", "gate.json")
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		t.Fatalf("mkdir bench: %v", err)
 	}
-	if err := os.WriteFile("bench/gate.json", b, 0o644); err != nil {
+	if err := os.WriteFile(out, b, 0o644); err != nil {
 		t.Fatalf("write gate report: %v", err)
 	}
 	red := 0
