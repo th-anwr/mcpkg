@@ -238,7 +238,7 @@ CI on `main` (merge `a17624b`, run 42387690960): the `go` job and the `docker` j
 | 14 | Fixed | **Partly** | 10 of 44 non-test files log. Boundaries are covered (httpx, queue, docker sandbox, runner). Still silent: `llm/llm.go` (calls, tokens, cost), `scan/scan.go` and `scan/extract.go` (scanner exit codes), `mcpclient/*` (smoke handshake), `submit/submit.go`, `store/store.go` (query errors), `sandbox/process.go`, `sources/*`. Do llm, scan, mcpclient and submit first. |
 | 15 | Fixed | Fixed | `Validate()` runs in `main.go` before the logger; unit test present. |
 | 16 | Fixed | Fixed | `release.yml` on `v*` tags pushes to GHCR; bootstrap pulls when `MCPKG_IMAGE` is set. See 25. |
-| 18 | Fixed | **Broken** | See 24. |
+| 18 | Fixed | Fixed (round 3) | See 24. |
 | 19 | Not an issue | Agreed | |
 | 21 | Fixed | Fixed | `.npmjs.org registry.yarnpkg.com`; the proxy image builds. |
 | 22 | Fixed | Fixed | `crates.io index.crates.io static.crates.io`; no overlap. |
@@ -248,9 +248,9 @@ CI on `main` (merge `a17624b`, run 42387690960): the `go` job and the `docker` j
 
 | # | Severity | Issue | Fix |
 |---|---|---|---|
-| 24 | **High** | `internal/web/server.go`: the CSP header is one Go string literal that contains the text `` `+imgHosts+` `` (backticks inside double quotes are characters, not concatenation). The header sent is `img-src 'self' data: `+imgHosts+`; ...`, so the allowlist never applies and every README image and badge is blocked. `imgHosts` is unused (an unused package-level const does not fail vet). CI stayed green because nothing asserts the header. | Change to `"... img-src 'self' data: " + imgHosts + "; style-src ..."`. Add a handler test that requests `/` and asserts the CSP header contains `raw.githubusercontent.com` and no backtick. |
+| 24 | **High** (Fixed in `36ac3e2` + `25fa772`, test in `837b12d`) | `internal/web/server.go`: the CSP header is one Go string literal that contains the text `` `+imgHosts+` `` (backticks inside double quotes are characters, not concatenation). The header sent is `img-src 'self' data: `+imgHosts+`; ...`, so the allowlist never applies and every README image and badge is blocked. `imgHosts` is unused (an unused package-level const does not fail vet). CI stayed green because nothing asserts the header. | Change to `"... img-src 'self' data: " + imgHosts + "; style-src ..."`. Add a handler test that requests `/` and asserts the CSP header contains `raw.githubusercontent.com` and no backtick. |
 | 25 | Medium | `release.yml` pushes `mcpkg-runner` and `mcpkg-egress-proxy` for amd64 only. With `HEAVY_ON_CORE=1` on the arm64 core box, bootstrap pulls images that cannot run there. | Build those two for `linux/amd64,linux/arm64` as well, or make bootstrap refuse `HEAVY_ON_CORE=1` when `uname -m` is `aarch64` and `MCPKG_PROXY_IMAGE` is set. |
 | 26 | Low | `clientKey` trusts the last `X-Forwarded-For` hop. Correct behind Caddy, but only while `web:8080` is not reachable from outside. | Keep `web` without a `ports:` mapping (verify) and say so in `DEPLOY.md`; or have Caddy set `X-Real-IP` and read that instead. |
 | 27 | Low | The multi-arch `docker buildx build` in `ci.yml` has no `--output`, so it only checks that the build succeeds (fine) and prints a warning each run. | Add `--output type=cacheonly`, or leave as is. |
 
-**Next**: fix 24 (a one-line change plus a test), then the remaining files in 14, then 10. Everything else in this round is verified.
+**Next**: the remaining files in 14, then 10, then 25. Issue 24 is fixed and covered by `TestSecurityHeaders`; CI run 42395953523 on `25fa772` is green (go + docker). Note for Go edits: gofmt drops the spaces around `+` inside a multi-argument call, so write `"a"+x+"b"` there.
