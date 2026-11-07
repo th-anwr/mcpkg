@@ -3,6 +3,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly: real-network end-to-end pipeline (installs real packages from npm/PyPI).
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
 
 jobs:
   go:
@@ -38,6 +42,14 @@ jobs:
         with:
           go-version-file: go.mod
         continue-on-error: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+      - name: gosec (sandbox, launch, web)
+        uses: securego/gosec@v2.30.0
+        with:
+          args: "-severity=high -confidence=high ./internal/sandbox/... ./internal/launch/... ./internal/web/..."
 
   docker:
     runs-on: ubuntu-24.04
@@ -51,3 +63,33 @@ jobs:
         run: docker build -f sandbox/runner.Dockerfile -t mcpkg-runner:ci sandbox
       - name: egress proxy image
         run: docker build -f sandbox/proxy.Dockerfile -t mcpkg-egress-proxy:ci sandbox
+
+  # Full pipeline against real npm/PyPI/GitHub, on a schedule or by hand.
+  # Deliberately not on every push: real package installs are slow and flaky.
+  e2e-network:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mcpkg
+          POSTGRES_PASSWORD: mcpkg
+          POSTGRES_DB: mcpkg_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mcpkg -d mcpkg_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: install uv (smoke tests install PyPI packages with uv)
+        run: pip install uv
+      - name: full pipeline (real npm/PyPI installs)
+        run: go test ./internal/e2e -run TestFullPipeline -v -timeout 40m
+        env:
+          TEST_DATABASE_URL: postgres://mcpkg:mcpkg@localhost:5432/mcpkg_test?sslmode=disable
+          E2E_NETWORK: "1"

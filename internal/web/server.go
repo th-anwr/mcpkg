@@ -57,7 +57,7 @@ func New(cfg config.Config, st *store.Store, res *submit.Resolver, log *slog.Log
 		}
 		s.pages[page] = t
 	}
-	tt, err := ttemplate.New("install.md.tmpl").Funcs(ttemplate.FuncMap(funcs())).ParseFS(templateFS, "templates/install.md.tmpl", "templates/llms.txt.tmpl")
+	tt, err := ttemplate.New("install.md.tmpl").Funcs(funcs()).ParseFS(templateFS, "templates/install.md.tmpl", "templates/llms.txt.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("text templates: %w", err)
 	}

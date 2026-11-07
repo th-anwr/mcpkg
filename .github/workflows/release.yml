@@ -32,9 +32,11 @@ jobs:
           short="${SHA::12}"
           docker buildx build --push --platform linux/amd64,linux/arm64 -f deploy/Dockerfile \
             -t "$reg/mcpkg:$tag" -t "$reg/mcpkg:sha-$short" .
-          docker buildx build --push --platform linux/amd64 -f sandbox/runner.Dockerfile \
+          # runner + proxy must build for arm64 too: the core box is t4g (arm64) and
+          # may run them when HEAVY_ON_CORE=1 (ISSUES #25).
+          docker buildx build --push --platform linux/amd64,linux/arm64 -f sandbox/runner.Dockerfile \
             -t "$reg/mcpkg-runner:$tag" -t "$reg/mcpkg-runner:sha-$short" sandbox
-          docker buildx build --push --platform linux/amd64 -f sandbox/proxy.Dockerfile \
+          docker buildx build --push --platform linux/amd64,linux/arm64 -f sandbox/proxy.Dockerfile \
             -t "$reg/mcpkg-egress-proxy:$tag" -t "$reg/mcpkg-egress-proxy:sha-$short" sandbox
           {
             echo "### Images"

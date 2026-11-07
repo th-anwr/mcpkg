@@ -138,14 +138,14 @@ func (c *Client) Do(ctx context.Context, r Request) ([]byte, http.Header, error)
 			if ctx.Err() != nil {
 				return nil, nil, ctx.Err()
 			}
-			sleep(ctx, backoff(attempt))
+			_ = sleep(ctx, backoff(attempt))
 			continue
 		}
 		data, rerr := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 		resp.Body.Close()
 		if rerr != nil {
 			lastErr = rerr
-			sleep(ctx, backoff(attempt))
+			_ = sleep(ctx, backoff(attempt))
 			continue
 		}
 		c.debug("http", "method", r.Method, "host", u.Host, "path", u.Path, "status", resp.StatusCode, "ms", time.Since(start).Milliseconds(), "attempt", attempt)
@@ -162,14 +162,14 @@ func (c *Client) Do(ctx context.Context, r Request) ([]byte, http.Header, error)
 				c.Log.Warn("rate limited", "host", u.Host, "status", resp.StatusCode, "until", until.UTC().Format(time.RFC3339))
 			}
 			if time.Until(until) < 90*time.Second && attempt < c.Retries {
-				sleep(ctx, time.Until(until)+time.Second)
+				_ = sleep(ctx, time.Until(until)+time.Second)
 				continue
 			}
 			return nil, resp.Header, &queue.ErrRateLimited{Until: until}
 		}
 		if resp.StatusCode >= 500 || resp.StatusCode == 408 {
 			lastErr = herr
-			sleep(ctx, backoff(attempt))
+			_ = sleep(ctx, backoff(attempt))
 			continue
 		}
 		return nil, resp.Header, herr

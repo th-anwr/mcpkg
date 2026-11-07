@@ -1,0 +1,45 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unconvert
+    - unused
+  settings:
+    errcheck:
+      # Close/Rollback errors on cleanup paths and log-writer calls are
+      # deliberate in this codebase; anything else must be handled.
+      exclude-functions:
+        - (io.ReadCloser).Close
+        - (*os.File).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*compress/gzip.Reader).Close
+        - (*archive/zip.ReadCloser).Close
+        - os.Rename
+        - os.Remove
+        - os.RemoveAll
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+        - (github.com/mcpkg/mcpkg/internal/httpx).sleep
+    staticcheck:
+      # Style/quickfix suggestions are out of scope; keep the safety (SA*/S*) checks.
+      checks:
+        - all
+        - -QF1001
+        - -QF1002
+        - -ST1018
+
+  exclusions:
+    rules:
+      - path: _test\.go$
+        linters:
+          - errcheck

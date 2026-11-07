@@ -577,7 +577,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	return st, rows.Err()
 }
 
-// ListUpdatedAfter pages through listed tools for the subregistry API.
+// ListForAPI pages through listed tools for the subregistry API.
 func (s *Store) ListForAPI(ctx context.Context, afterID int64, limit int, updatedSince *time.Time) ([]*model.Tool, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 30

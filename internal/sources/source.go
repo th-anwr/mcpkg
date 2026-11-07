@@ -41,7 +41,7 @@ type Source interface {
 	Crawl(ctx context.Context, opt Options, emit func(Candidate) error) (cursor string, err error)
 }
 
-// MCP SDK packages: a dependency on one of these marks a package as MCP-related.
+// NpmMCPDeps lists npm MCP SDK packages: a dependency on one of these marks a package as MCP-related.
 var NpmMCPDeps = []string{
 	"@modelcontextprotocol/sdk", "fastmcp", "mcp-framework", "xmcp", "mcp-handler",
 	"@vercel/mcp-adapter", "tmcp", "@mastra/mcp", "mcp-use", "@modelcontextprotocol/server",
