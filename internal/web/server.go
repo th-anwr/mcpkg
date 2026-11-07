@@ -318,9 +318,8 @@ func (s *Server) tool(w http.ResponseWriter, r *http.Request) {
 	if d.Tab == "health" {
 		d.Runs, _ = s.Store.CheckRuns(r.Context(), t.ID, 30)
 	}
-	if d.Tab == "benchmarks" {
-		d.Benchmarks, _ = s.Store.BenchmarksForTool(r.Context(), t.ID)
-	}
+	// Loaded on every tab: the nav shows the Benchmarks tab only when rows exist.
+	d.Benchmarks, _ = s.Store.BenchmarksForTool(r.Context(), t.ID)
 	s.render(w, "tool", d)
 }
 

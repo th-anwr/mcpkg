@@ -109,18 +109,18 @@ func TestGate(t *testing.T) {
 		return fixture{slug, repo, pkg, want}
 	}
 	fixtures := []fixture{
-		mk("clean-a", "https://github.com/acme/alpha", "alpha", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictPass, "mcp-conformance": bench.VerdictPass}),
-		mk("clean-b", "https://github.com/acme/beta", "beta", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictPass, "mcp-conformance": bench.VerdictPass}),
-		mk("clean-c", "https://github.com/acme/gamma", "gamma", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictPass, "mcp-conformance": bench.VerdictPass}),
-		mk("mal-a", "https://github.com/acme/mal-a", "mal-a", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictFail, "mcp-conformance": bench.VerdictPass}),
-		mk("mal-b", "https://github.com/acme/mal-b", "mal-b", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictFail, "mcp-conformance": bench.VerdictPass}),
-		mk("mal-c", "https://github.com/acme/mal-c", "mal-c", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictFail, "mcp-conformance": bench.VerdictPass}),
-		mk("warn-a", "https://github.com/acme/warn-a", "warn-a", map[string]bench.Verdict{"scorecard": bench.VerdictWarn, "osv": bench.VerdictWarn, "mcp-conformance": bench.VerdictPass}),
-		mk("warn-b", "https://github.com/acme/warn-b", "warn-b", map[string]bench.Verdict{"scorecard": bench.VerdictWarn, "osv": bench.VerdictWarn, "mcp-conformance": bench.VerdictPass}),
-		mk("warn-c", "https://github.com/acme/warn-c", "warn-c", map[string]bench.Verdict{"scorecard": bench.VerdictWarn, "osv": bench.VerdictWarn, "mcp-conformance": bench.VerdictPass}),
-		mk("dead-a", "https://github.com/acme/dead-a", "", map[string]bench.Verdict{"scorecard": bench.VerdictFail, "osv": bench.VerdictSkip, "mcp-conformance": bench.VerdictFail}),
-		mk("dead-b", "https://github.com/acme/dead-b", "", map[string]bench.Verdict{"scorecard": bench.VerdictFail, "osv": bench.VerdictSkip, "mcp-conformance": bench.VerdictFail}),
-		mk("dead-c", "https://github.com/acme/dead-c", "", map[string]bench.Verdict{"scorecard": bench.VerdictFail, "osv": bench.VerdictSkip, "mcp-conformance": bench.VerdictFail}),
+		mk("clean-a", "https://github.com/acme/alpha", "alpha", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictPass, "mcp-handshake": bench.VerdictPass}),
+		mk("clean-b", "https://github.com/acme/beta", "beta", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictPass, "mcp-handshake": bench.VerdictPass}),
+		mk("clean-c", "https://github.com/acme/gamma", "gamma", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictPass, "mcp-handshake": bench.VerdictPass}),
+		mk("mal-a", "https://github.com/acme/mal-a", "mal-a", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictFail, "mcp-handshake": bench.VerdictPass}),
+		mk("mal-b", "https://github.com/acme/mal-b", "mal-b", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictFail, "mcp-handshake": bench.VerdictPass}),
+		mk("mal-c", "https://github.com/acme/mal-c", "mal-c", map[string]bench.Verdict{"scorecard": bench.VerdictPass, "osv": bench.VerdictFail, "mcp-handshake": bench.VerdictPass}),
+		mk("warn-a", "https://github.com/acme/warn-a", "warn-a", map[string]bench.Verdict{"scorecard": bench.VerdictWarn, "osv": bench.VerdictWarn, "mcp-handshake": bench.VerdictPass}),
+		mk("warn-b", "https://github.com/acme/warn-b", "warn-b", map[string]bench.Verdict{"scorecard": bench.VerdictWarn, "osv": bench.VerdictWarn, "mcp-handshake": bench.VerdictPass}),
+		mk("warn-c", "https://github.com/acme/warn-c", "warn-c", map[string]bench.Verdict{"scorecard": bench.VerdictWarn, "osv": bench.VerdictWarn, "mcp-handshake": bench.VerdictPass}),
+		mk("dead-a", "https://github.com/acme/dead-a", "", map[string]bench.Verdict{"scorecard": bench.VerdictSkip, "osv": bench.VerdictSkip, "mcp-handshake": bench.VerdictFail}),
+		mk("dead-b", "https://github.com/acme/dead-b", "", map[string]bench.Verdict{"scorecard": bench.VerdictSkip, "osv": bench.VerdictSkip, "mcp-handshake": bench.VerdictFail}),
+		mk("dead-c", "https://github.com/acme/dead-c", "", map[string]bench.Verdict{"scorecard": bench.VerdictSkip, "osv": bench.VerdictSkip, "mcp-handshake": bench.VerdictFail}),
 	}
 
 	var tools []*model.Tool
@@ -159,7 +159,7 @@ func TestGate(t *testing.T) {
 	// --- Run -----------------------------------------------------------------
 	runner := &bench.Runner{HTTP: httpx.New("bench-gate/1"), ScorecardAPI: scorecard.URL, OSVAPI: osvAPI.URL,
 		AllowPrivate: true} // fixtures live on loopback; production keeps the SSRF guard
-	scanners := runner.Scanners([]string{"scorecard", "osv", "mcp-conformance"})
+	scanners := runner.Scanners([]string{"scorecard", "osv", "mcp-handshake"})
 
 	run := func() [][]bench.Result {
 		out := make([][]bench.Result, len(tools))
@@ -232,12 +232,8 @@ func TestGate(t *testing.T) {
 	diffs := 0
 	for i := range first {
 		for j := range first[i] {
-			a, b := first[i][j], second[i][j]
-			a.RanAt, b.RanAt = time.Time{}, time.Time{}
-			a.DurationMs, b.DurationMs = 0, 0
-			aj, _ := json.Marshal(a)
-			bj, _ := json.Marshal(b)
-			if string(aj) != string(bj) {
+			aj, bj := stable(first[i][j]), stable(second[i][j])
+			if aj != bj {
 				diffs++
 				b3.Pass = false
 			}
@@ -321,6 +317,23 @@ type Gate struct {
 	Pass      bool   `json:"pass"`
 	Value     string `json:"value"`
 	Threshold string `json:"threshold"`
+}
+
+// stable is a result with every timing value removed (ran_at, duration_ms and
+// any "*_ms" key in raw), so B3 compares measurements, not clock jitter.
+func stable(r bench.Result) string {
+	r.RanAt, r.DurationMs = time.Time{}, 0
+	var raw map[string]any
+	if json.Unmarshal(r.Raw, &raw) == nil {
+		for k := range raw {
+			if strings.HasSuffix(k, "_ms") {
+				delete(raw, k)
+			}
+		}
+		r.Raw, _ = json.Marshal(raw)
+	}
+	b, _ := json.Marshal(r)
+	return string(b)
 }
 
 func orEnv(k, def string) string {

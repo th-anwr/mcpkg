@@ -163,7 +163,7 @@
         <td>{{agoT .RanAt}}</td>
         <td>{{.DurationMs}} ms</td>
       </tr>
-      {{with .Raw}}<tr class="bench-raw"><td colspan="5"><details><summary>Raw output</summary><pre class="log">{{.}}</pre></details></td></tr>{{end}}
+      {{with .Raw}}<tr class="bench-raw"><td colspan="5"><details><summary>Raw output</summary><pre class="log">{{rawText .}}</pre></details></td></tr>{{end}}
       {{end}}
       </tbody></table>
       <p class="fineprint">Raw results are also available as JSON at <code>/api/bench/{{$t.Slug}}</code>.</p>

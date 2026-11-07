@@ -1,6 +1,6 @@
 # Benchmark gate (mcpkg)
 
-Status: **proposed, not implemented**. Blocks deploy.
+Status: **tier 1 implemented** (B0–B3, B5; `internal/bench/gate_test.go`). Tier 2 (B6–B8) not built. Blocks deploy.
 Version 0.1 — numeric thresholds are provisional and freeze after the first baseline run.
 
 ## Why this document exists
@@ -35,14 +35,17 @@ needs.
 | **B7** | Cost | 30-day projected AWS spend ≤ the $114 credit envelope; bench stage ≤ 40% of worker compute; 0 idle workers after the first pass. | T2 | Cost Explorer + run ledger |
 | **B8** | Ops + rollback | `deploy/aws/teardown.sh` removes workers and leaves core intact; backup + restore drill restores benchmark rows; `DEPLOY.md` documents the drill. | T2 | executed drill, written up |
 
-## Gate report
+## Gate report and enforcement
 
-- One artifact per commit: `bench/gate.json`.
-- Shape: `{ "sha": "...", "tier": 1, "gates": [{ "id": "B0", "pass": true, "value": ..., "threshold": ..., "evidence": "path" }] }`.
-- CI job `bench-gate` runs the tier-1 gates on every `main` commit, fails on any
-  red gate, uploads the report as an artifact, and commits it back to `main`.
-- `deploy/aws/push.sh` refuses to run unless `GATE_SHA=<sha>` names a commit whose
-  committed report is green. No report → no deploy.
+- CI job `bench-gate` runs the tier-1 gates on every push and pull request and fails on any
+  red gate. `TestGate` writes `bench/gate.json` (`{ "sha", "tier": 1, "gates": [{ "id", "pass", "value", "threshold" }] }`),
+  kept as the `bench-gate-report` artifact of that run. It is not committed: a bot commit per push
+  breaks branch protection, races other pushes, and the report always described the previous commit.
+- `deploy/aws/push.sh` deploys only when `GATE_SHA=<tag|sha>` is a commit whose `go`, `docker` and
+  `bench-gate` check runs are green on GitHub (`require_green_ci` in `deploy/aws/lib.sh`, public
+  check-runs API). With a git checkout it also refuses a working tree that is not exactly that
+  commit, because `push.sh` uploads the working tree. Break-glass: `GATE_OVERRIDE="<reason>"`.
+- With branch protection on `main`, make `go`, `docker` and `bench-gate` required status checks.
 
 ## Stage contract (what "writing it" must satisfy)
 
@@ -55,6 +58,14 @@ needs.
 - Feature flag `BENCH_ENABLED`; the tab stays hidden until B4 is green.
 - Scanner order, cheap → expensive: conformance, scorecard, osv, trivy, gitleaks,
   semgrep, mcp-scanner, mcplint. promptfoo only for the top 500, behind a second flag.
+- Built today: `scorecard` (API), `osv` (API), `mcp-handshake` (mcpkg's own handshake against
+  remote endpoints, deliberately **not** called "conformance": it is not the official
+  `@modelcontextprotocol/conformance` suite). `gitleaks`, `trivy`, `semgrep`, `mcplint` are
+  placeholders that report `skip=scanner-unavailable` and are off by default.
+- Skip reasons: `no-repo`, `no-endpoint`, `no-package`, `scanner-unavailable`, `not-applicable`,
+  `timeout`, `no-data` (upstream has no result, e.g. repo not in the Scorecard dataset),
+  `auth-required`, `needs-config` (templated URL or declared headers). "Not measured" is a skip,
+  never `fail`; an upstream outage is `error`, never `fail`.
 
 ## Open decisions
 

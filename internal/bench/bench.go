@@ -47,6 +47,9 @@ const (
 	SkipScannerUnavailable = "scanner-unavailable" // binary not installed / API not configured
 	SkipNotApplicable      = "not-applicable"      // scanner does not apply to this tool
 	SkipTimeout            = "timeout"
+	SkipNoData             = "no-data"       // upstream has no result for this tool (e.g. repo not in the Scorecard dataset)
+	SkipAuthRequired       = "auth-required" // endpoint wants credentials we do not have
+	SkipNeedsConfig        = "needs-config"  // endpoint URL is a template or needs declared headers
 )
 
 // MaxRawBytes caps one scanner's raw output (gate B0: 256 KiB).
@@ -138,8 +141,8 @@ func (r *Runner) Scanners(names []string) []Scanner {
 			out = append(out, &Scorecard{API: r.ScorecardAPI, HTTP: r.HTTP, UA: r.UserAgent})
 		case "osv":
 			out = append(out, &OSV{API: r.OSVAPI, HTTP: r.HTTP, UA: r.UserAgent})
-		case "mcp-conformance":
-			out = append(out, &Conformance{HTTP: r.HTTP, Log: r.Log, AllowPrivate: r.AllowPrivate})
+		case "mcp-handshake":
+			out = append(out, &Handshake{HTTP: r.HTTP, Log: r.Log, AllowPrivate: r.AllowPrivate})
 		case "gitleaks", "trivy", "semgrep", "mcplint":
 			out = append(out, &Binary{Bin: n})
 		default:
@@ -195,10 +198,16 @@ func runOne(ctx context.Context, sc Scanner, t Target) (res Result) {
 	return res
 }
 
+// rawJSON encodes v for the raw column. Oversized output is replaced by a
+// marker instead of being cut, because cut JSON is invalid and the jsonb insert
+// would fail.
 func rawJSON(v any) json.RawMessage {
-	b, _ := json.Marshal(v)
+	b, err := json.Marshal(v)
+	if err != nil {
+		b, _ = json.Marshal(map[string]any{"error": "unencodable output: " + err.Error()})
+	}
 	if len(b) > MaxRawBytes {
-		b = b[:MaxRawBytes]
+		b, _ = json.Marshal(map[string]any{"truncated": true, "bytes": len(b)})
 	}
 	return b
 }
@@ -237,12 +246,17 @@ func (s *Scorecard) Run(ctx context.Context, t Target) Result {
 	start := time.Now()
 	err := s.HTTP.GetJSON(ctx, s.API+"/projects/github.com/"+slug, nil, &res)
 	base.DurationMs = time.Since(start).Milliseconds()
+	if httpx.IsNotFound(err) {
+		// Scorecard only covers repos in its weekly crawl; most MCP repos are not
+		// in it. "Not measured" must not read as "failed".
+		return Skip(s, SkipNoData)
+	}
 	if err != nil {
-		base.ExitCode, base.Verdict, base.Raw = 1, VerdictFail, rawJSON(map[string]any{"error": truncate(err.Error(), 500)})
+		base.ExitCode, base.Verdict, base.Raw = 1, VerdictError, rawJSON(map[string]any{"error": truncate(err.Error(), 500)})
 		return base
 	}
 	if res.Score == 0 && res.Error != "" {
-		base.ExitCode, base.Verdict, base.Raw = 1, VerdictFail, rawJSON(map[string]any{"error": truncate(res.Error, 500)})
+		base.ExitCode, base.Verdict, base.Raw = 1, VerdictError, rawJSON(map[string]any{"error": truncate(res.Error, 500)})
 		return base
 	}
 	verdict := VerdictPass
@@ -272,6 +286,7 @@ func (o *OSV) Run(ctx context.Context, t Target) Result {
 		return Skip(o, SkipNoPackage)
 	}
 	var malicious, vulns []string
+	checked := 0
 	start := time.Now()
 	for _, p := range t.Packages {
 		if ctx.Err() != nil {
@@ -295,6 +310,7 @@ func (o *OSV) Run(ctx context.Context, t Target) Result {
 			base.ExitCode, base.Verdict, base.Raw = 1, VerdictError, rawJSON(map[string]any{"error": truncate(err.Error(), 500)})
 			return base
 		}
+		checked++
 		for _, v := range res.Vulns {
 			if strings.HasPrefix(v.ID, "MAL-") {
 				malicious = append(malicious, v.ID)
@@ -304,6 +320,10 @@ func (o *OSV) Run(ctx context.Context, t Target) Result {
 		}
 	}
 	base.DurationMs = time.Since(start).Milliseconds()
+	if checked == 0 {
+		// Only OCI/other ecosystems OSV does not cover: nothing was measured.
+		return Skip(o, SkipNotApplicable)
+	}
 	verdict := VerdictPass
 	switch {
 	case len(malicious) > 0:
@@ -311,7 +331,7 @@ func (o *OSV) Run(ctx context.Context, t Target) Result {
 	case len(vulns) > 0:
 		verdict = VerdictWarn
 	}
-	base.Raw = rawJSON(map[string]any{"malicious": malicious, "vulnerabilities": vulns, "packages_checked": len(t.Packages)})
+	base.Raw = rawJSON(map[string]any{"malicious": malicious, "vulnerabilities": vulns, "packages_checked": checked})
 	base.Verdict = verdict
 	return base
 }
@@ -328,28 +348,36 @@ func ecosystem(registry string) string {
 	return ""
 }
 
-// Conformance runs a real MCP handshake against the tool's remote endpoint
-// (same client and SSRF guard as the smoke stage). stdio-only tools are
-// skipped with a reason code — never reported as passing (gate B2).
-type Conformance struct {
+// Handshake runs mcpkg's own MCP handshake (initialize, tools/list, ...)
+// against the tool's remote endpoint, with the same client and SSRF guard as
+// the smoke stage. It is NOT the official MCP conformance suite
+// (@modelcontextprotocol/conformance), so it is not named after it on the
+// public page. stdio-only tools are skipped with a reason code, never "pass".
+type Handshake struct {
 	HTTP         *httpx.Client
 	Log          *slog.Logger
 	AllowPrivate bool // tests only
 }
 
-func (c *Conformance) Name() string    { return "mcp-conformance" }
-func (c *Conformance) Version() string { return mcpclient.LatestProtocol }
+func (c *Handshake) Name() string    { return "mcp-handshake" }
+func (c *Handshake) Version() string { return "mcpkg/" + mcpclient.LatestProtocol }
 
-func (c *Conformance) Run(ctx context.Context, t Target) Result {
+func (c *Handshake) Run(ctx context.Context, t Target) Result {
 	base := Result{Scanner: c.Name(), ScannerVersion: c.Version(), RanAt: time.Now().UTC()}
 	if len(t.Remotes) == 0 {
 		return Skip(c, SkipNoEndpoint)
 	}
 	remote := t.Remotes[0]
+	if strings.Contains(remote.URL, "{") || len(remote.Headers) > 0 {
+		return Skip(c, SkipNeedsConfig) // templated URL or declared headers: we cannot fill them in
+	}
 	client := mcpclient.SafeHTTPClient(40*time.Second, c.AllowPrivate)
 	start := time.Now()
 	info, err := mcpclient.HandshakeHTTPLog(ctx, client, remote.URL, remote.Type, nil, c.Log)
 	base.DurationMs = time.Since(start).Milliseconds()
+	if errors.Is(err, mcpclient.ErrAuthRequired) {
+		return Skip(c, SkipAuthRequired)
+	}
 	if err != nil {
 		base.ExitCode, base.Verdict, base.Raw = 1, VerdictFail, rawJSON(map[string]any{"error": truncate(err.Error(), 500)})
 		return base

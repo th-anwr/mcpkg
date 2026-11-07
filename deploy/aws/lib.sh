@@ -91,3 +91,59 @@ env_set() {
   cat "$tmp" > "$f"
   rm -f "$tmp"
 }
+
+# require_green_ci is the deploy gate (docs/BENCH_GATE.md). push.sh deploys a
+# commit only when GitHub shows its CI jobs passed (GATE_CHECKS, default
+# go,docker,bench-gate). It reads the public check-runs API, so CI never has
+# to commit anything back to main and branch protection keeps working.
+#   GATE_SHA=v0.1.0 ./deploy/aws/push.sh core        # tag, branch or full sha
+#   GATE_OVERRIDE="why" ...                           # break-glass, printed loudly
+#   GATE_TOKEN=<read-only PAT> ...                    # only for a private repo
+require_green_ci() {
+  local ref="${GATE_SHA:-}" repo="${GATE_REPO:-}" checks="${GATE_CHECKS:-go,docker,bench-gate}" sha json
+  if [ -n "${GATE_OVERRIDE:-}" ]; then
+    printf '\033[1;31m!!\033[0m DEPLOY GATE OVERRIDDEN: %s\n' "$GATE_OVERRIDE" >&2
+    return 0
+  fi
+  [ -n "$ref" ] || die "set GATE_SHA=<tag or commit>: push.sh only deploys commits whose CI passed (docs/DEPLOY.md)"
+  sha="$ref"
+  if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    # push.sh uploads the working tree, so it must be exactly the commit CI tested.
+    sha="$(git -C "$REPO_ROOT" rev-parse --verify -q "$ref^{commit}")" \
+      || die "GATE_SHA=$ref is not a commit in this checkout (git fetch --tags origin)"
+    [ "$(git -C "$REPO_ROOT" rev-parse HEAD)" = "$sha" ] \
+      || die "this checkout is not at $ref: run 'git checkout $ref' first"
+    [ -z "$(git -C "$REPO_ROOT" status --porcelain)" ] \
+      || die "uncommitted changes in the checkout: commit and push them so CI tests what you deploy"
+    if [ -z "$repo" ]; then
+      repo="$(git -C "$REPO_ROOT" config --get remote.origin.url 2>/dev/null \
+        | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##')"
+    fi
+  fi
+  [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || repo="th-anwr/mcpkg" # not a GitHub remote
+  local hdr=(-H "Accept: application/vnd.github+json")
+  [ -n "${GATE_TOKEN:-}" ] && hdr+=(-H "Authorization: Bearer $GATE_TOKEN")
+  json="$(curl -fsS -m 20 "${hdr[@]}" "https://api.github.com/repos/$repo/commits/$sha/check-runs?per_page=100")" \
+    || die "could not read CI results for $ref from GitHub ($repo). Private repo? set GATE_TOKEN"
+  printf '%s' "$json" | python3 -c '
+import json, sys
+ref, need = sys.argv[1], [c for c in sys.argv[2].split(",") if c]
+latest = {}
+for r in json.load(sys.stdin).get("check_runs", []):
+    n = r.get("name")
+    if n in need and (n not in latest or r.get("id", 0) > latest[n].get("id", 0)):
+        latest[n] = r  # newest run of each job (re-runs get higher ids)
+bad = []
+for n in need:
+    r = latest.get(n)
+    if r is None:
+        bad.append(n + ": never ran")
+    elif r.get("status") != "completed":
+        bad.append(n + ": still " + str(r.get("status")))
+    elif r.get("conclusion") != "success":
+        bad.append(n + ": " + str(r.get("conclusion")))
+if bad:
+    sys.exit("deploy gate RED for %s: %s" % (ref, "; ".join(bad)))
+print("deploy gate green for %s: %s" % (ref, ", ".join(need)))
+' "$ref" "$checks" || die "deploy blocked: fix CI for $ref first (or GATE_OVERRIDE=<reason>)"
+}

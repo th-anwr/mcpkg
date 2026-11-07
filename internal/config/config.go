@@ -100,7 +100,7 @@ func Load() Config {
 		SandboxCPUs:          env("SANDBOX_CPUS", "1"),
 
 		BenchEnabled:    envBool("BENCH_ENABLED", false),
-		BenchScanners:   env("BENCH_SCANNERS", "scorecard,osv,mcp-conformance,gitleaks,trivy,semgrep,mcplint"),
+		BenchScanners:   env("BENCH_SCANNERS", "scorecard,osv,mcp-handshake"),
 		BenchTimeoutSec: envInt("BENCH_TIMEOUT_SEC", 90),
 		BenchRepoDir:    os.Getenv("BENCH_REPO_DIR"),
 

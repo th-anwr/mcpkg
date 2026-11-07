@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/mcpkg/mcpkg/internal/httpx"
 	"github.com/mcpkg/mcpkg/internal/model"
 )
 
@@ -72,7 +74,7 @@ func TestRunToolPanicBecomesError(t *testing.T) {
 	}
 }
 
-func TestConformanceSSRFGuard(t *testing.T) {
+func TestHandshakeSSRFGuard(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var m map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&m)
@@ -88,7 +90,7 @@ func TestConformanceSSRFGuard(t *testing.T) {
 	target := Target{Slug: "x", Remotes: []model.Remote{{Type: "streamable-http", URL: srv.URL}}}
 
 	// Default: loopback refused (the production SSRF guard).
-	c := &Conformance{}
+	c := &Handshake{}
 	if r := c.Run(t.Context(), target); r.Verdict != VerdictFail {
 		t.Fatalf("private endpoint without AllowPrivate: verdict=%s, want fail", r.Verdict)
 	}
@@ -111,4 +113,67 @@ func (f *fakeScanner) Run(_ context.Context, _ Target) Result {
 		panic("boom")
 	}
 	return Result{Scanner: f.name, ScannerVersion: f.version, RanAt: time.Now().UTC(), Verdict: VerdictPass}
+}
+
+// TestSkipSemantics: "not measured" must never read as "failed" on the page.
+func TestSkipSemantics(t *testing.T) {
+	sc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "unknown"):
+			http.NotFound(w, r)
+		case strings.Contains(r.URL.Path, "broken"):
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			fmt.Fprint(w, `{"score":7.5,"date":"2026-11-01"}`)
+		}
+	}))
+	defer sc.Close()
+	hc := httpx.New("bench-test/1")
+	hc.Retries = 0
+	card := &Scorecard{API: sc.URL, HTTP: hc}
+	cases := []struct {
+		repo   string
+		want   Verdict
+		reason string
+	}{
+		{"https://github.com/acme/ok", VerdictPass, ""},
+		{"https://github.com/acme/unknown", VerdictSkip, SkipNoData}, // not in the Scorecard dataset
+		{"https://github.com/acme/broken", VerdictError, ""},         // upstream outage is not a tool failure
+		{"https://gitlab.com/acme/x", VerdictSkip, SkipNoRepo},
+	}
+	for _, c := range cases {
+		r := card.Run(t.Context(), Target{Slug: "x", RepoURL: c.repo})
+		if r.Verdict != c.want || r.SkipReason != c.reason {
+			t.Errorf("scorecard %s: %s/%s, want %s/%s", c.repo, r.Verdict, r.SkipReason, c.want, c.reason)
+		}
+		if err := r.Valid(); err != nil {
+			t.Errorf("scorecard %s: %v", c.repo, err)
+		}
+	}
+
+	osv := &OSV{API: "http://127.0.0.1:1", HTTP: hc} // never called: no supported ecosystem
+	r := osv.Run(t.Context(), Target{Slug: "x", Packages: []model.Package{{RegistryType: "oci", Identifier: "ghcr.io/a/b"}}})
+	if r.Verdict != VerdictSkip || r.SkipReason != SkipNotApplicable {
+		t.Errorf("osv with only OCI packages: %s/%s, want skip/not-applicable", r.Verdict, r.SkipReason)
+	}
+
+	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer auth.Close()
+	h := &Handshake{AllowPrivate: true}
+	if r := h.Run(t.Context(), Target{Slug: "x", Remotes: []model.Remote{{Type: "streamable-http", URL: auth.URL}}}); r.Verdict != VerdictSkip || r.SkipReason != SkipAuthRequired {
+		t.Errorf("401 endpoint: %s/%s, want skip/auth-required", r.Verdict, r.SkipReason)
+	}
+	if r := h.Run(t.Context(), Target{Slug: "x", Remotes: []model.Remote{{Type: "streamable-http", URL: "https://{tenant}.example.com/mcp"}}}); r.Verdict != VerdictSkip || r.SkipReason != SkipNeedsConfig {
+		t.Errorf("templated URL: %s/%s, want skip/needs-config", r.Verdict, r.SkipReason)
+	}
+}
+
+func TestRawJSONStaysValid(t *testing.T) {
+	big := strings.Repeat("x", MaxRawBytes+10)
+	raw := rawJSON(map[string]any{"out": big})
+	if !json.Valid(raw) || len(raw) > MaxRawBytes {
+		t.Fatalf("oversized raw output must become a small valid marker, got %d bytes valid=%v", len(raw), json.Valid(raw))
+	}
 }

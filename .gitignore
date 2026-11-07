@@ -4,3 +4,6 @@ logs/
 .env
 *.test
 /tmp/
+
+# Tier-1 gate report: written by TestGate, kept as a CI artifact (never committed)
+bench/gate.json

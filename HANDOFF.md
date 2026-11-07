@@ -5,7 +5,7 @@ npm-style catalog of open-source MCP servers. Every server is discovered, checke
 
 ## Status (2026-11-08)
 - Code complete, all tests pass: unit, Postgres, end-to-end with real npm/PyPI installs, plus golangci-lint, gosec, and the tier-1 benchmark gate (B0–B3, B5) in CI.
-- **Not deployed yet.** Plan: AWS CloudShell following `docs/DEPLOY.md`. Every `push.sh` run now requires `GATE_SHA=<sha>` with a green `bench/gate.json` for that sha (committed to `main` by the `bench-gate` CI job).
+- **Not deployed yet.** Plan: AWS CloudShell following `docs/DEPLOY.md` (git clone + release tag). `push.sh` needs `GATE_SHA=<tag|sha>` and deploys only if GitHub shows `go`, `docker` and `bench-gate` green for that commit and the checkout is exactly that commit (`require_green_ci` in `deploy/aws/lib.sh`).
 - The AWS scripts were only dry-run against a fake AWS CLI. Docker images have never been built on a real box: the build sandbox blocked image registries.
 
 ## Stack and decisions
@@ -38,11 +38,12 @@ npm-style catalog of open-source MCP servers. Every server is discovered, checke
 go test ./...                                                        # unit
 TEST_DATABASE_URL=postgres://...mcpkg_test go test ./internal/e2e    # DB
 E2E_NETWORK=1 (same) go test ./internal/e2e -run TestFullPipeline    # real installs
+# DB tests (e2e and internal/bench TestGate) reset the same schema: with TEST_DATABASE_URL set, run `go test -p 1 ./...`
 ```
 
 ## Next tasks (agreed or offered)
 1. Deploy (`docs/DEPLOY.md`), then fix whatever breaks on the first real box.
-2. **Benchmarks: tier-1 done.** `internal/bench` (scorecard, osv, mcp-conformance; CLI adapters for gitleaks/trivy/semgrep/mcplint), `tool_benchmarks`/`bench_runs` tables, Benchmarks tab + `/api/bench/{slug}`, and the `bench-gate` CI job enforcing B0–B3+B5 per commit (`docs/BENCH_GATE.md`). Remaining:
+2. **Benchmarks: tier-1 done, off by default (`BENCH_ENABLED=false`).** `internal/bench` (scorecard, osv, mcp-handshake; placeholder adapters for gitleaks/trivy/semgrep/mcplint), `tool_benchmarks`/`bench_runs` tables, Benchmarks tab + `/api/bench/{slug}`, and the `bench-gate` CI job enforcing B0–B3+B5 per commit (`docs/BENCH_GATE.md`). Remaining:
    - Wire the CLI scanners to `BENCH_REPO_DIR` checkouts (they currently report `skip=scanner-unavailable`).
    - stdio conformance bridge, promptfoo red-team for the top 500.
    - **Tier-2 soak before public launch**: B6 perf, B7 cost, B8 teardown/restore drill.

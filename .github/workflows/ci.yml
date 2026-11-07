@@ -85,25 +85,25 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # Ubuntu 24.04's system pip refuses installs (PEP 668), so use pipx.
       - name: install uv (smoke tests install PyPI packages with uv)
-        run: pip install uv
+        run: |
+          pipx install uv
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: full pipeline (real npm/PyPI installs)
         run: go test ./internal/e2e -run TestFullPipeline -v -timeout 40m
         env:
           TEST_DATABASE_URL: postgres://mcpkg:mcpkg@localhost:5432/mcpkg_test?sslmode=disable
           E2E_NETWORK: "1"
 
-  # Tier-1 deploy gate (docs/BENCH_GATE.md): B0-B3 + B5 over a 12-tool
-  # known-answer fixture. Writes bench/gate.json, uploaded as an artifact and
-  # committed back to main, so deploy/aws/push.sh can require a green report
-  # for the exact GATE_SHA it is pushing. The gate commit does not re-trigger
-  # this job (message guard below).
+  # Tier-1 benchmark gate (docs/BENCH_GATE.md): B0-B3 + B5 over a 12-tool
+  # known-answer fixture. deploy/aws/push.sh deploys a commit only when this
+  # job, go and docker passed for it here (read from the check-runs API), so
+  # nothing is committed back to main. The report is kept as an artifact.
   bench-gate:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'gate:'))
-    permissions:
-      contents: write
+    if: github.event_name != 'schedule'
     services:
       postgres:
         image: postgres:16-alpine
@@ -132,25 +132,3 @@ jobs:
           name: bench-gate-report
           path: bench/gate.json
           if-no-files-found: ignore
-      - name: commit gate report
-        if: success()
-        run: |
-          git config user.name "mcpkg-gate"
-          git config user.email "gate@mcpkg.invalid"
-          git add bench/gate.json
-          if git diff --cached --quiet; then
-            echo "gate report unchanged"
-            exit 0
-          fi
-          git commit -m "gate: bench/gate.json for ${{ github.sha }}"
-          # main may have moved (other pushes landed while this job ran):
-          # rebase on top and retry a few times instead of failing the gate.
-          for i in 1 2 3 4 5; do
-            git fetch origin main
-            if git rebase origin/main && git push origin HEAD:main; then
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "gate report push failed after retries" >&2
-          exit 1

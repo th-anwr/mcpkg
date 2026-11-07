@@ -1,12 +1,19 @@
 package web
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mcpkg/mcpkg/internal/config"
 	"github.com/mcpkg/mcpkg/internal/model"
+	"github.com/mcpkg/mcpkg/internal/store"
 )
 
 func TestRenderReadmeIsSafe(t *testing.T) {
@@ -68,5 +75,40 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 	if rec.Header().Get("X-Frame-Options") != "DENY" {
 		t.Error("X-Frame-Options missing")
+	}
+}
+
+// TestBenchmarksTab: raw output renders as text, the tab is reachable from
+// other tabs when rows exist, and /api/bench rows encode even with no raw output.
+func TestBenchmarksTab(t *testing.T) {
+	s, err := New(config.Config{SiteName: "mcpkg", SiteURL: "http://x"}, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []store.BenchmarkRow{
+		{Scanner: "osv", ScannerVersion: "api-v1", RanAt: time.Now(), Verdict: "pass", Raw: json.RawMessage(`{"malicious":[]}`)},
+		{Scanner: "scorecard", ScannerVersion: "api-v1", RanAt: time.Now(), Verdict: "skip", SkipReason: "no-data"},
+	}
+	for _, tab := range []string{"readme", "benchmarks"} {
+		d := s.base("t", "")
+		d.Tool, d.Tab, d.Benchmarks = &model.Tool{Slug: "a", Name: "a"}, tab, rows
+		var buf bytes.Buffer
+		if err := s.pages["tool"].ExecuteTemplate(&buf, "layout.html", d); err != nil {
+			t.Fatal(err)
+		}
+		h := buf.String()
+		if !strings.Contains(h, "?tab=benchmarks") {
+			t.Errorf("tab=%s: Benchmarks tab link missing", tab)
+		}
+		if tab == "benchmarks" && (!strings.Contains(h, "&#34;malicious&#34;") || strings.Contains(h, "[123 34")) {
+			t.Errorf("raw output not rendered as text")
+		}
+	}
+	var out bytes.Buffer
+	if err := json.NewEncoder(&out).Encode(map[string]any{"benchmarks": rows}); err != nil {
+		t.Fatalf("api rows do not encode: %v", err)
+	}
+	if !strings.Contains(out.String(), `"skip_reason": "no-data"`) && !strings.Contains(out.String(), `"skip_reason":"no-data"`) {
+		t.Errorf("api shape: %s", out.String())
 	}
 }

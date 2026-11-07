@@ -649,17 +649,18 @@ func (s *Store) RecentSubmissions(ctx context.Context, clientKey string) (int, e
 
 // BenchmarkRow is one tool_benchmarks row, served to the Benchmarks tab and
 // the /api/bench endpoint.
+// JSON names match bench.Result (schema v1); this is the public /api/bench shape.
 type BenchmarkRow struct {
-	Scanner        string
-	ScannerVersion string
-	ImageDigest    string
-	RanAt          time.Time
-	DurationMs     int64
-	ExitCode       int
-	Verdict        string
-	SkipReason     string
-	Raw            json.RawMessage
-	RunID          int64
+	Scanner        string          `json:"scanner"`
+	ScannerVersion string          `json:"scanner_version"`
+	ImageDigest    string          `json:"image_digest,omitempty"`
+	RanAt          time.Time       `json:"ran_at"`
+	DurationMs     int64           `json:"duration_ms"`
+	ExitCode       int             `json:"exit_code"`
+	Verdict        string          `json:"verdict"`
+	SkipReason     string          `json:"skip_reason,omitempty"`
+	Raw            json.RawMessage `json:"raw,omitempty"` // omitempty: an empty RawMessage fails to marshal
+	RunID          int64           `json:"run_id,omitempty"`
 }
 
 // SaveBenchmarks appends rows for a run. Worker runs (runID 0) replace the
@@ -733,7 +734,9 @@ func (s *Store) BenchmarksForTool(ctx context.Context, toolID int64) ([]Benchmar
 			s.warn("benchmarks_for_tool.scan", err)
 			return nil, err
 		}
-		r.Raw = json.RawMessage(raw)
+		if raw != "" {
+			r.Raw = json.RawMessage(raw)
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()

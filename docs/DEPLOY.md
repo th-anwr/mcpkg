@@ -13,19 +13,20 @@ Everything runs from **AWS CloudShell** in the browser: no installs, no GitHub r
    - Repository access: *Public repositories (read-only)*
    - Expiry: 90 days
    - Copy the token.
-5. **Code.** Download the latest `mcpkg.zip`.
-6. **Deploy gate.** Every `push.sh` run requires a green tier-1 benchmark report for the exact commit being deployed (see `docs/BENCH_GATE.md`): the `bench-gate` CI job writes `bench/gate.json` for every commit to `main` and commits it back. Before starting tonight, note the commit sha you are deploying and confirm its report is green (Actions → bench-gate job, or check that `bench/gate.json` on `main` has `"sha"` = your commit and every gate `"pass": true`). You will pass it as `GATE_SHA=<sha>` below; `push.sh` refuses to run without it.
+5. **Release tag.** On GitHub: Releases → Draft a new release → tag `v0.1.0` on `main` → Publish. The `release` workflow builds the three images and pushes them to GHCR (about 15 min). Then open Packages on your profile and set `mcpkg`, `mcpkg-runner` and `mcpkg-egress-proxy` to public, so the boxes can pull them without a login.
+6. **Deploy gate.** `push.sh` deploys only a commit whose CI passed on GitHub (`go`, `docker` and `bench-gate`; see `docs/BENCH_GATE.md`). Check that the Actions run for the tagged commit is green. You pass the tag as `GATE_SHA=v0.1.0` below. Break-glass, for a fix you must ship before CI finishes: `GATE_OVERRIDE="<reason>"`, printed in red.
 
 ## Tonight
 
-### 1. Open CloudShell and unpack (2 min)
+### 1. Open CloudShell and get the code (2 min)
 
-Open CloudShell (the `>_` icon in the console top bar). Upload `mcpkg.zip` with Actions → Upload file, then:
+Open CloudShell (the `>_` icon in the console top bar), then:
 
 ```bash
-unzip -q mcpkg.zip && cd mcpkg && chmod +x deploy/aws/*.sh scripts/*.sh
-# no unzip?  python3 -m zipfile -e mcpkg.zip . && cd mcpkg && chmod +x deploy/aws/*.sh scripts/*.sh
+git clone https://github.com/th-anwr/mcpkg.git && cd mcpkg && git checkout v0.1.0
 ```
+
+`push.sh` uploads this checkout, and the gate checks that it is exactly the tagged commit with no local edits.
 
 ### 2. Create `.env` (2 min)
 
@@ -37,6 +38,15 @@ unzip -q mcpkg.zip && cd mcpkg && chmod +x deploy/aws/*.sh scripts/*.sh
 - Paste the GitHub token when asked.
 - Leave the LLM empty for tonight: descriptions come from the READMEs, and an LLM can be added later.
 - The script prints your `/admin/review` password. Save it.
+- Use the prebuilt images, so the 2 GB core box pulls instead of building:
+  ```bash
+  sed -i '/^\(MCPKG_IMAGE\|MCPKG_PROXY_IMAGE\|SANDBOX_IMAGE\)=/d' .env
+  cat >> .env <<'EOF'
+  MCPKG_IMAGE=ghcr.io/th-anwr/mcpkg:v0.1.0
+  MCPKG_PROXY_IMAGE=ghcr.io/th-anwr/mcpkg-egress-proxy:v0.1.0
+  SANDBOX_IMAGE=ghcr.io/th-anwr/mcpkg-runner:v0.1.0
+  EOF
+  ```
 
 ### 3. Launch the core box (3 min)
 
@@ -54,11 +64,12 @@ It prints the IP.
 ### 4. Install and start it (10–15 min)
 
 ```bash
-GATE_SHA=<sha> ./deploy/aws/push.sh core```
+GATE_SHA=v0.1.0 ./deploy/aws/push.sh core
+```
 
 This copies the code and `.env`, installs Docker (pinned, `DOCKER_VERSION=28.5`), builds the images and starts the database, website, scheduler and light worker.
 
-- **Faster, no OOM risk:** push a tag (`git tag v0.1.0 && git push origin v0.1.0`). The `release` workflow builds the images for amd64 + arm64 and pushes them to GHCR. Put the three image lines from the run summary (`MCPKG_IMAGE`, `MCPKG_PROXY_IMAGE`, `SANDBOX_IMAGE`) in `.env`, make the packages public on GitHub (or `docker login ghcr.io` on each box), then run `push.sh`. It pulls instead of building.
+- With the image lines from step 2 the box pulls the `v0.1.0` images. Without them it builds on the box (slower, and the 2 GB core can run out of memory).
 - **Postgres for workers:** `bootstrap.sh` sets `DB_BIND` to the core box's private IP. The `mcpkg` security group allows 5432 only from other `mcpkg` boxes, so the database is never public.
 - **Admin password:** `/admin/*` uses HTTP Basic auth. Until a domain with HTTPS is set up, the password is sent in clear text, so avoid using it on untrusted networks.
 
@@ -74,7 +85,7 @@ This copies the code and `.env`, installs Docker (pinned, `DOCKER_VERSION=28.5`)
 
 ```bash
 ./deploy/aws/launch.sh worker          # prints the worker IP
-GATE_SHA=<sha> ./deploy/aws/push.sh worker <worker-ip>
+GATE_SHA=v0.1.0 ./deploy/aws/push.sh worker <worker-ip>
 # repeat for a second worker (a second CloudShell tab works in parallel)
 ```
 
@@ -120,7 +131,7 @@ That's it for tonight. Running cost: about $0.60/day for the core box and about 
 - **Domain:**
   1. Point an A record at the core IP.
   2. In CloudShell, set `DOMAIN=yourdomain.com` and `SITE_URL=https://yourdomain.com` in `.env`.
-  3. Run `GATE_SHA=<sha> ./deploy/aws/push.sh core`. Caddy gets the TLS certificate automatically.
+  3. Run `GATE_SHA=v0.1.0 ./deploy/aws/push.sh core`. Caddy gets the TLS certificate automatically.
 - **LLM descriptions (Bedrock):**
   1. Enable an open-weight model in the Bedrock console and create a Bedrock API key.
   2. Set these in `.env`:
@@ -129,10 +140,10 @@ That's it for tonight. Running cost: about $0.60/day for the core box and about 
      LLM_API_KEY=<key>
      LLM_MODEL=openai.gpt-oss-20b
      ```
-  3. Run `GATE_SHA=<sha> ./deploy/aws/push.sh core`.
+  3. Run `GATE_SHA=v0.1.0 ./deploy/aws/push.sh core`.
   4. Test quality on 50 tools: `./deploy/aws/ssh.sh core sudo /opt/mcpkg/scripts/mcpkg.sh eval-llm -n 50`.
   5. Re-describe everything: `... mcpkg.sh enqueue -stage enrich -all`.
-- **Code changes:** edit in CloudShell (or upload a new zip), then `GATE_SHA=<sha> ./deploy/aws/push.sh core` and `push.sh worker <ip>`. Pushing again is safe.
+- **Code changes:** merge to `main`, tag a new release (`v0.1.1`), wait for green CI, then in CloudShell `git fetch --tags && git checkout v0.1.1`, update the image tags in `.env`, and run `GATE_SHA=v0.1.1 ./deploy/aws/push.sh core` (and each worker). Pushing again is safe.
 
 ## Troubleshooting
 

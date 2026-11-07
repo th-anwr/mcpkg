@@ -13,34 +13,12 @@ HOST="${2:-}"
 cd "$REPO_ROOT"
 [ -f .env ] || die ".env not found in $REPO_ROOT (run ./scripts/make-env.sh first)"
 
-# Tier-1 deploy gate (docs/BENCH_GATE.md): refuse to push a tree without a green
-# gate report for the exact commit being deployed. GATE_SHA must name the commit
-# the bench-gate CI job tested; the report itself is committed to main by that job.
-GATE_SHA="${GATE_SHA:-}"
-[ -n "$GATE_SHA" ] || die "set GATE_SHA=<commit sha> for the code you are deploying (docs/BENCH_GATE.md)"
-# A tag name (v0.1.0) is fine when git can resolve it to the commit sha.
-if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse "$GATE_SHA^{commit}" >/dev/null 2>&1; then
-  GATE_SHA="$(git -C "$REPO_ROOT" rev-parse "$GATE_SHA^{commit}")"
+# Deploy gate (docs/BENCH_GATE.md): only commits whose CI passed on GitHub.
+require_green_ci
+IMG="$(env_value .env MCPKG_IMAGE || true)"
+if [ -n "$IMG" ] && [ -n "${GATE_SHA:-}" ] && [ "${IMG##*:}" != "$GATE_SHA" ] && [ "${IMG##*:}" != "sha-${GATE_SHA:0:12}" ]; then
+  log "warning: .env runs image tag ${IMG##*:} but GATE_SHA is $GATE_SHA (set MCPKG_IMAGE, MCPKG_PROXY_IMAGE, SANDBOX_IMAGE to the same tag)"
 fi
-[ -f bench/gate.json ] || die "bench/gate.json missing: run the bench-gate CI job for $GATE_SHA first"
-python3 - "$GATE_SHA" <<'PY'
-import json, sys
-want = sys.argv[1]
-try:
-    with open("bench/gate.json") as f:
-        rep = json.load(f)
-except Exception as e:
-    sys.exit("gate report unreadable: %s" % e)
-if rep.get("tier") != 1:
-    sys.exit("gate report is not a tier-1 report")
-if rep.get("sha") != want:
-    sys.exit("gate report is for %s, not %s" % (rep.get("sha"), want))
-red = [g["id"] for g in rep.get("gates", []) if not g.get("pass")]
-if red:
-    sys.exit("gate RED: %s — deploy blocked (docs/BENCH_GATE.md)" % ",".join(red))
-print("bench gate: green (%d gates) for %s" % (len(rep.get("gates", [])), want))
-PY
-log "bench gate green for $GATE_SHA"
 
 if [ "$ROLE" = "core" ] && [ -z "$HOST" ]; then
   load_core

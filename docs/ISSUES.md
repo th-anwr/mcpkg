@@ -401,3 +401,43 @@ not changed this round; CI runs on Linux and is green.
    the first pass, `./deploy/aws/teardown.sh workers`.
 6. T2 soak (B6–B8) on a prod-shaped stack **before** DNS/public launch.
 7. Rotate the PAT that was used for these commits (it was shared in chat).
+
+## 13. Pre-deploy review of round 4 (2026-11-08, Opus)
+
+All suites run on Linux: gofmt, vet, build, unit, Postgres e2e, `E2E_NETWORK=1 TestFullPipeline` (real npm/PyPI installs), `-race`, shellcheck, YAML/JSON. Before the fixes, `TestGate` failed **2 of 15** runs under CPU load (B3).
+
+### New issues
+
+| # | Severity | Issue | Fix |
+|---|---|---|---|
+| 28 | **High** | `deploy/aws/push.sh` lost its exec bit (100755 → 100644) in an API commit. After `git clone`, `./deploy/aws/push.sh` fails with "Permission denied". | Mode restored. |
+| 29 | **High** | The deploy gate blocked the normal deploy. The `bench/gate.json` on `main` always describes the *previous* commit (the bot commits it afterwards), so a tag on `main` HEAD fails the sha match. It also never bound the uploaded tree to `GATE_SHA`: any local edit deployed as long as some green sha was named. | `require_green_ci` (`deploy/aws/lib.sh`): reads GitHub check runs for `GATE_SHA` and requires `go`, `docker` and `bench-gate` to be green. With git, also requires HEAD == `GATE_SHA` and a clean tree. Break-glass: `GATE_OVERRIDE="<reason>"`. Tested against a fake API: green, red, in progress, never ran, API down, wrong ref, HEAD mismatch, dirty, untracked, no git. |
+| 30 | **High** | B3 is flaky. The `init_ms` timing in the handshake raw output differs between runs, so the gate went red at random and blocked deploys. | B3 strips `ran_at`, `duration_ms` and every `*_ms` key in raw before comparing. 30/30 green under load. |
+| 31 | Med | The bot committing to `main` conflicts with branch protection (§2), races other pushes (needed a rebase-retry loop), and adds a commit per push. Pushes made with `GITHUB_TOKEN` never trigger workflows, so `gate:` commits never got CI at all (§12.5 says go + docker still run on them). | Bot removed. The report is an artifact only and `bench/gate.json` is gitignored. `bench-gate` runs on pushes and PRs, so it can be a required check. |
+| 32 | High\* | `/api/bench/{slug}` returned 200 with an **empty body** for any tool with a skip row: an empty `json.RawMessage` fails to marshal, and every tool has skip rows. The JSON keys were also Go field names. | `raw,omitempty`, nil raw when empty, snake_case keys matching schema v1. |
+| 33 | Med\* | The Benchmarks tab showed raw output as byte numbers (`[123 34 ...]`). | `rawText` template func (indented JSON). |
+| 34 | Med\* | The Benchmarks tab link only appeared when you were already on that tab: rows were loaded only for `?tab=benchmarks`. | Rows are loaded on every tab. `TestBenchmarksTab` covers 32–34. |
+| 35 | High\* | Scorecard returned **fail** on 404. Most MCP repos are not in Scorecard's dataset, so most of the catalog would publicly show "scorecard: fail". Upstream 5xx also counted as fail. The gate fixture encoded this (`dead → fail`). | 404 → `skip/no-data`, transport or 5xx → `error`. Fixture updated. |
+| 36 | Med\* | OSV returned **pass** with `packages_checked=N` when no package was in an ecosystem OSV covers (OCI only): nothing measured, reported as clean. | Counts only queried packages; zero → `skip/not-applicable`. |
+| 37 | Med\* | "mcp-conformance" claims to be the official `@modelcontextprotocol/conformance` suite, but it is our own handshake. 401 endpoints and templated URLs scored `fail`. | Renamed to `mcp-handshake` (version `mcpkg/<protocol>`). 401 → `skip/auth-required`, `{var}` URL or declared headers → `skip/needs-config`. |
+| 38 | Low | `rawJSON` cut oversized output mid-JSON. The `jsonb` insert would then fail. | Replaced by a valid `{"truncated":true,"bytes":N}` marker. |
+| 39 | Low | `DEPLOY.md`: the code fence was broken (copying gave `push.sh core```` → usage error). The zip flow had no `.git`, so the gate could not verify the tree. | Runbook uses `git clone` + `git checkout v0.1.0`, a release tag from the GitHub UI, image lines in `.env`, and `GATE_SHA=v0.1.0`. |
+| 40 | Low | The weekly `e2e-network` job ran `pip install uv`. That fails on Ubuntu 24.04 (PEP 668). The job had never run. | `pipx install uv`. |
+| 41 | Low | `TestGate` and the e2e tests both `DROP SCHEMA public` on `TEST_DATABASE_URL`. A local `go test ./...` runs them in parallel and they clobber each other (CI runs them in separate jobs). | Documented: `go test -p 1 ./...` (HANDOFF commands). |
+| 42 | Info | The gate's claims are broader than its checks. B5 checks the stage contract (Continue, no fields, replace on re-run); the network, LLM and auto-hide invariants are covered by `TestFullPipeline`, not the gate. B0 does not check `image_digest` (API scanners have none). B2 runs against fakes, so it tests verdict mapping, not real scanners. | Not changed. Read B2 as "verdict mapping is correct". |
+| 43 | Low | `mcpclient.handshake`: the new "Warn on failure" branch never runs (the outer `err` is always nil there; failures return early). | Not fixed (log-only). |
+
+\* Bench is off by default (`BENCH_ENABLED=false`), so 32–37 do not affect the first deploy. They would have shown up as soon as it was enabled.
+
+### Rulings on §12.6
+
+| # | Decision | Ruling |
+|---|---|---|
+| 1 | B4 not in `TestGate` | Accept. B4 is now a web test (`TestBenchmarksTab`), which found 32–34. |
+| 2 | Conformance remote-only | Accept, but under an honest name (#37). Run the official suite as its own scanner later. |
+| 3 | CLI scanners stubbed | Accept, but they are removed from the default `BENCH_SCANNERS`. They only ever produced 4 skip rows per tool. |
+| 4 | Scorecard from the API | Accept, with the 404 fix (#35). |
+| 5 | promptfoo not built, bench off | Accept. |
+| 6 | Tier 2 (B6–B8) not built | Accept for the first deploy. Do it before DNS/public launch, as specified. |
+| 7 | Branch protection unverified | It was incompatible with the bot commit (#31). Now compatible: protect `main` and require `go`, `docker` and `bench-gate`. |
+| 8 | Cleartext admin, HTTP on IP, XFF | Accept until a domain exists. Verified: `web` has no `ports:` in compose (only `db` and `caddy` do), so the XFF trust holds. |

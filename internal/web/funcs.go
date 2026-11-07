@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -19,7 +20,15 @@ func funcs() template.FuncMap {
 	return template.FuncMap{
 		"ago":   ago,
 		"stale": func(t *time.Time) bool { return t != nil && time.Since(*t) > StaleAfter },
-		"agoT":  func(t time.Time) string { return ago(&t) },
+		// rawText shows a benchmark's raw JSON as indented text ([]byte would print as numbers).
+		"rawText": func(b json.RawMessage) string {
+			var out bytes.Buffer
+			if json.Indent(&out, b, "", "  ") != nil {
+				return string(b)
+			}
+			return out.String()
+		},
+		"agoT": func(t time.Time) string { return ago(&t) },
 		"f1": func(f *float64) string {
 			if f == nil {
 				return "—"
