@@ -131,6 +131,8 @@ ref, need = sys.argv[1], [c for c in sys.argv[2].split(",") if c]
 latest = {}
 for r in json.load(sys.stdin).get("check_runs", []):
     n = r.get("name")
+    if r.get("conclusion") == "skipped":
+        continue  # the weekly scheduled run skips bench-gate; that must not hide the push result
     if n in need and (n not in latest or r.get("id", 0) > latest[n].get("id", 0)):
         latest[n] = r  # newest run of each job (re-runs get higher ids)
 bad = []
