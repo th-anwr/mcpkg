@@ -154,3 +154,26 @@ Fixed in `8aba0db` and `879312b`. CI run 43004024867 on `879312b` is green: `go`
 | # | Sev | Finding | Status |
 |---|---|---|---|
 | N21 | Medium | Found while testing N15. With `MSYS_NO_PATHCONV=1` exported for the whole script, Git Bash also stops translating `/c/...` paths for the native `git.exe`. `git -C "$REPO_ROOT"` then fails, and `require_green_ci` silently skips its "checkout is exactly `GATE_SHA` and clean" checks and goes straight to the GitHub check. Today's first deploy ran with that variable exported by hand, so those two checks did not run. The checkout was in fact clean at `v0.1.0`. | Fixed in `879312b` by scoping the variable to `aws` calls. Verified on Windows: the gate now refuses a checkout at the wrong commit and one with an untracked file. |
+
+## 7. After the v0.1.1 release (2026-11-11)
+
+`v0.1.1` runs on the core box. It was redeployed with the fixed scripts and no Windows workarounds, and the database container was not touched. The worker still runs `v0.1.0` images, which is fine, because N20 only changes the health stage on the core.
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| N20 | Reopened, Medium | Batching did not help. In the 10 minutes after the redeploy, npm 429 warnings rose from 293 to 465, and the share of checked npm tools that got a download count fell from 91–96% to 85%. 57% of npm MCP packages are scoped (12,794 of 22,339), and the bulk endpoint cannot take those, so they still need one request each. The batch now sends its scoped lookups back to back, which is burstier than before. | `httpx.New` already spaces requests per host for `crates.io`, `pypi.org` and `api.github.com`, but not for `api.npmjs.org`. Add a gap for it, for example one request per second, and keep the bulk path for unscoped names. Then measure with the coverage query below. |
+| N22 | **High** | Every npm and PyPI smoke install fails under gVisor with `getaddrinfo EAI_AGAIN egress-proxy`. Install containers get `HTTPS_PROXY=http://egress-proxy:3128` on the internal `mcpkg-egress` network, and Docker's embedded DNS does not answer inside gVisor. Verified on a worker with the runner image: `getent hosts egress-proxy` returns 172.18.0.2 under `runc` and fails under `runsc`. By 10:50 UTC, 97 npm and 97 PyPI tools were marked `install_failed`, with no successful installs. Only remote servers pass. These wrong results are written to the catalog and appear on tool pages. | Give the `egress` network a fixed subnet and `egress-proxy` a fixed `ipv4_address` in `deploy/docker-compose.yml`, and have `DockerRunner.InstallArgs` add `--add-host egress-proxy:<that address>`. gVisor reads `/etc/hosts`. Alternatively, set `SANDBOX_PROXY` to the IP literal. Afterwards, re-queue smoke for every `install_failed` tool. Do not switch to `SANDBOX_RUNTIME=` (runc) as a workaround: workers hold the database password, so a container escape could rewrite the catalog. |
+| N23 | Medium | Spot worker `i-057f90be528124c7a` (c7a.xlarge, us-east-1a) was reclaimed about 75 minutes after launch, with state reason `Server.SpotInstanceTermination`. Both workers had been placed in us-east-1a. `~/.mcpkg/workers.list` still lists the dead worker. | Let `launch.sh` pick the cheapest zone at launch time: us-east-1f was $0.079 an hour against $0.091 in 1a. Or fall back across c7a, c6a and m7a. Drop dead entries from `workers.list`. |
+| N24 | Low | `status.sh` folds `install_failed` into "broken", so "198 broken" read as broken servers, when 194 of them were sandbox install failures. | Report `install_failed` as its own count. |
+
+npm download coverage per 10 minutes, for N20 (run on the core box with `scripts/sql.sh`):
+
+```sql
+select to_char(date_trunc('hour', c) + floor(extract(minute from c)/10) * interval '10 min', 'HH24:MI') as utc_10min,
+       count(*) as npm_tools_checked,
+       round(100.0 * count(*) filter (where (health->>'weeklyDownloads')::bigint > 0) / count(*), 1) as pct_with_downloads
+from (select (health->>'checkedAt')::timestamptz as c, health from tools
+      where packages @> '[{"registryType":"npm"}]' and health is not null
+        and (health->>'checkedAt')::timestamptz > now() - interval '70 min') x
+group by 1 order by 1;
+```
