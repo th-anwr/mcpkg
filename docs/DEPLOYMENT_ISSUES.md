@@ -11,6 +11,7 @@ No secrets, account IDs or private keys belong in this file: the repository is p
 | 2026-11-11 09:42 | `v0.1.0` (`a6dab94`) | core t4g.small on-demand, 2 × c7a.xlarge spot workers | Windows 11, Git Bash | Up. Needed four manual workarounds (N15 to N18). |
 | 2026-11-11 10:44 | `v0.1.1` (`d0a207c`) | core only | Windows 11, Git Bash | Up on the first try with no workarounds. Database container untouched. |
 | 2026-11-11 11:45 | `v0.1.2` (`fe01f26`, PR #2) | core and the remaining spot worker, in parallel | Windows 11, Git Bash | Up. Fixes N22, N20 and N24, all verified in production (see below). 328 wrongly failed tools re-queued. |
+| 2026-11-11 12:32 | `v0.1.3` (`19fd7b8`) | core and the worker, in parallel | Windows 11, Git Bash | Up. Fixes N25, verified in production (see below). 355 `install_failed` tools queued for a new smoke test. |
 
 Site: `http://23.23.102.237` (plain HTTP, no domain yet). Checks after each deploy:
 
@@ -27,7 +28,7 @@ ok
 | N20 | Medium | npm downloads API rate limits (HTTP 429) | Fixed in `v0.1.2`: 429s down from 293–465 to 62 per 10 minutes |
 | N23 | Medium | Spot worker reclaimed 38 minutes after launch | **Open**: one worker left |
 | N24 | Low | `status.sh` counts install failures as "broken" | Fixed in `v0.1.2` |
-| N25 | Medium | Sandbox Python 3.11 fails packages that need Python 3.12 or newer | **Open** |
+| N25 | Medium | Sandbox Python 3.11 fails packages that need Python 3.12 or newer | Fixed in `v0.1.3`, verified in production |
 | N21 | Medium | Deploy gate skipped its checkout checks on Windows | Fixed in `879312b` |
 | N15 | Medium | Git Bash rewrote AWS parameter names | Fixed in `879312b` |
 | N16 | Medium | SSH key saved with Windows line endings | Fixed in `8aba0db` |
@@ -323,3 +324,58 @@ The runner image has Python 3.11.2 (`uv 0.5.11`, Node `v22.23.4`). Packages that
 6 of the 36 PyPI smoke results in the first 20 minutes after `v0.1.2` failed this way, about 1 in 6.
 
 **Fix.** Install a newer Python into the runner image at build time (for example `uv python install 3.13 3.12`), and have the PyPI install use it: pass `--python 3.13`, or retry with a newer Python when uv reports `does not satisfy Python>=`. Then re-queue the affected tools with `enqueue -stage smoke -smoke-status install_failed`.
+
+## `v0.1.3` deploy: N25 fixed (2026-11-11 12:32 UTC)
+
+**Change** (`37285e2`, `19fd7b8`). The runner image ships uv-managed Python 3.12 and 3.13 next to the system Python 3.11. A PyPI install still tries 3.11 first, named explicitly, so packages that worked before install exactly as before. Only when uv reports that the package needs a newer Python does the install retry with 3.13, then 3.12. Any other failure stops at once with the original error.
+
+**Caught in CI before release.** The first version never retried: uv wraps its message across lines, so the text did not match.
+
+```
+╰─▶ Because the current Python version (3.11.2) does not satisfy
+    Python>=3.12 and django==6.0 depends on Python>=3.12, we can conclude
+```
+
+`19fd7b8` matches on whitespace-collapsed output. `sandbox-e2e` now installs `django==6.0` (requires Python 3.12 or newer) and checks that the retry happens for it and not for `wheel`:
+
+```
+installed wheel==0.45.1 under docker+runsc, bin=wheel
+installed django==6.0 under docker+runsc, bin=django-admin
+--- PASS: TestDockerInstallThroughProxy/pypi-needs-py312 (6.26s)
+```
+
+**Production checks on the worker.** The worker's runner image:
+
+```
+Python 3.11.2
+cpython-3.13.1-linux-x86_64-gnu    (managed)
+cpython-3.12.8-linux-x86_64-gnu    (managed)
+cpython-3.11.2-linux-x86_64-gnu    /usr/bin/python3.11
+```
+
+The deployed install script, run the way the sandbox runs it (gVisor, egress network, proxy by address). `basic-memory` is a catalog server that had failed with the error above:
+
+```
+basic-memory==1.0.0: exit=0 in 28s, venv=Python 3.13.1, retried=1, bins=MCPKG_BINS=["basic-memory", "bm"]
+wheel==0.45.1:       exit=0 in 1s,  venv=Python 3.11.2, retried=0, bins=MCPKG_BINS=["wheel"]
+```
+
+The run phase (gVisor, `--network none`, `--read-only`, all capabilities dropped) starts the server installed with 3.13:
+
+```
+$ /work/venv/bin/basic-memory --version
+Basic Memory version: 1.0.0
+```
+
+**Re-queue.** Every tool marked `install_failed` now has a smoke job waiting:
+
+```
+level=INFO msg=enqueued stage=smoke matched=355 new_jobs=27
+ install_failed_tools | with_smoke_job_waiting
+                  355 |                    355
+```
+
+## Retries and queue order
+
+- Failed installs are retried automatically every week. After rendering a tool, the pipeline schedules its next full check, smoke test included, seven days later (`recheck.health_every_days` in `pipeline.json`). This applies to every tool that is not blocked.
+- Jobs queued by hand with `./scripts/mcpkg.sh enqueue` get priority 0, the lowest. New tools are ordered by popularity, and within a priority level older jobs go first, so re-queued failures run after everything already waiting and do not hold up the worker.
