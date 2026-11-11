@@ -22,10 +22,10 @@ ok
 
 | # | Severity | Issue | Status |
 |---|---|---|---|
-| N22 | **High** | Smoke installs fail for every npm and PyPI server under gVisor | **Open** |
-| N20 | Medium | npm downloads API rate limits (HTTP 429) | **Open** (batching shipped in `v0.1.1`, did not help) |
+| N22 | **High** | Smoke installs fail for every npm and PyPI server under gVisor | Fixed in code (PR #2), tested under gVisor in CI. **Not deployed.** |
+| N20 | Medium | npm downloads API rate limits (HTTP 429) | Pacing added (PR #2). **Not deployed, not measured.** |
 | N23 | Medium | Spot worker reclaimed 38 minutes after launch | **Open** |
-| N24 | Low | `status.sh` counts install failures as "broken" | **Open** |
+| N24 | Low | `status.sh` counts install failures as "broken" | Fixed in code (PR #2). Not deployed. |
 | N21 | Medium | Deploy gate skipped its checkout checks on Windows | Fixed in `879312b` |
 | N15 | Medium | Git Bash rewrote AWS parameter names | Fixed in `879312b` |
 | N16 | Medium | SSH key saved with Windows line endings | Fixed in `8aba0db` |
@@ -75,6 +75,27 @@ Do not work around it with `SANDBOX_RUNTIME=` (plain `runc`). Workers hold the d
 
 **How to verify the fix.** On a worker, the `runsc` lookup above returns the proxy address. Within an hour of redeploying, `works` grows for the `npm` and `pypi` methods.
 
+**What was changed (PR #2).** A different route from the one proposed above, with no compose, network or `.env` change on the boxes. `DockerRunner` asks Docker which container on the egress network answers to the proxy name, and gives the sandbox `HTTPS_PROXY`/`HTTP_PROXY` with that address, so nothing inside the sandbox needs DNS. The address is cached for a minute and looked up again after any failed install. Setting `SANDBOX_PROXY` to an address still works and skips the lookup.
+
+Two cases are now retried as infrastructure errors and no longer written to the tool's page as `install_failed`: the proxy cannot be found while the runtime is gVisor, or the install output shows the proxy itself was unreachable.
+
+**Test.** The new CI job `sandbox-e2e` installs gVisor the way `bootstrap.sh` does, starts the proxy image on an internal network next to the default one, and installs `semver` (npm) and `wheel` (PyPI) in the sandbox. Run 43011725542, Docker 28.0.4, runsc release-20261102.0:
+
+```
+runc    by name:     install works
+runc    by address:  installed semver@7.6.3, wheel==0.45.1
+runsc   by name:     npm error request to https://registry.npmjs.org/semver failed, reason: getaddrinfo EAI_AGAIN egress-proxy
+runsc   by address:  installed semver@7.6.3, wheel==0.45.1
+```
+
+The `runsc by name` line is the production failure, reproduced. This was not tested on the AWS worker itself.
+
+**After deploying to the workers,** re-queue the tools that were marked wrongly (about 194 at the time of writing):
+
+```
+./scripts/mcpkg.sh enqueue -stage smoke -smoke-status install_failed
+```
+
 ### N20 (Medium): npm downloads API rate limits
 
 **Symptom.** The light worker on the core box logs a steady stream of:
@@ -115,6 +136,8 @@ So more than half the lookups are still one request each. They are now sent back
 
 **Fix.** `httpx.New` already keeps a minimum gap between requests for `crates.io`, `pypi.org` and `api.github.com`, but has none for `api.npmjs.org`. Add one, for example one request per second, and keep the bulk path for unscoped names. Measure again with the coverage query in `docs/ISSUES-NEW.md` section 7.
 
+**What was changed (PR #2).** `httpx.New` paces `api.npmjs.org` at one request per second. Demand is about 0.4 scoped lookups per second, so this spreads the bursts without slowing the stage. `NPM_API_GAP_MS` in `.env` overrides the gap without a release. npm does not publish the limit, so one per second is a first guess: after deploying to the core box, count the 429 warnings and run the coverage query again.
+
 ### N23 (Medium): spot worker reclaimed
 
 ```
@@ -137,6 +160,8 @@ Nothing was lost: the database is on the core box, and the worker's jobs go back
 ### N24 (Low): install failures counted as "broken"
 
 `status.sh` printed `smoke: 10 works, 14 need key/auth, 198 broken`, which read as 198 broken servers. 194 of them were the sandbox install failures from N22. Report `install_failed` as its own count.
+
+**What was changed (PR #2).** `mcpkg stats`, which `status.sh` prints, now reads `smoke: 10 works, 14 need key/auth, 4 broken, 194 install failed`. The home page still shows the two together as "fail to start".
 
 ## Fixed issues
 

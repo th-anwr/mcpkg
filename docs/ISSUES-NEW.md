@@ -179,3 +179,12 @@ group by 1 order by 1;
 ```
 
 Deployment problems, with the output that shows each one, are tracked in `docs/DEPLOYMENT_ISSUES.md`.
+
+### 7.1 Fix status (2026-11-11, PR #2)
+
+| # | Status | What changed |
+|---|---|---|
+| N22 | Fixed in code, **not deployed** | `DockerRunner` resolves the proxy name to the proxy container's address on the egress network and passes that to the sandbox, so no DNS is needed inside gVisor. Proxy-unreachable installs are retried as infrastructure errors instead of being recorded as `install_failed`. The new CI job `sandbox-e2e` reproduces the failure by name under gVisor and passes by address for one npm and one PyPI package. Not tested on the AWS worker. After deploying, run `./scripts/mcpkg.sh enqueue -stage smoke -smoke-status install_failed`. |
+| N20 | Paced in code, **not deployed, not measured** | One request per second to `api.npmjs.org`; `NPM_API_GAP_MS` overrides. Measure with the query above after deploying to the core box. |
+| N24 | Fixed in code, not deployed | `mcpkg stats` prints `broken` and `install failed` separately. |
+| N23 | Open | Not touched. |
