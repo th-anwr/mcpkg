@@ -8,6 +8,14 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /usr/local/bin/
 
+# Newer Pythons for PyPI servers that require them (issue N25). The system
+# python3 (3.11) stays the first choice; the install retries with these only
+# when uv reports that a package needs a newer Python. Installed at build time,
+# because at run time UV_PYTHON_DOWNLOADS=never and the sandbox has no network.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
+RUN uv python install 3.12 3.13 \
+ && chmod -R a+rX /opt/uv-python
+
 # Unprivileged user. /work is the per-job volume (owned by runner so named
 # volumes inherit the ownership on first mount).
 RUN useradd --create-home --uid 10001 runner \

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -70,11 +71,17 @@ func TestDockerInstallThroughProxy(t *testing.T) {
 		}
 	})
 
-	for _, job := range []Job{
-		{ID: "it-npm", Kind: "npm", Package: "semver", Version: "7.6.3"},
-		{ID: "it-pypi", Kind: "pypi", Package: "wheel", Version: "0.45.1"},
+	for _, c := range []struct {
+		name  string
+		job   Job
+		newPy bool // the package needs Python >= 3.12, so the install must retry with a newer one (N25)
+	}{
+		{"npm", Job{ID: "it-npm", Kind: "npm", Package: "semver", Version: "7.6.3"}, false},
+		{"pypi", Job{ID: "it-pypi", Kind: "pypi", Package: "wheel", Version: "0.45.1"}, false},
+		{"pypi-needs-py312", Job{ID: "it-pypi-312", Kind: "pypi", Package: "django", Version: "6.0"}, true},
 	} {
-		t.Run(job.Kind, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
+			job := c.job
 			defer d.Cleanup(job)
 			bin, out, err := d.Install(ctx, job)
 			if err != nil {
@@ -82,6 +89,9 @@ func TestDockerInstallThroughProxy(t *testing.T) {
 			}
 			if bin == "" {
 				t.Fatalf("install %s: no runnable bin found\n%s", job.Spec(), tail(out, 2000))
+			}
+			if retried := strings.Contains(out, "needs a newer Python"); retried != c.newPy {
+				t.Errorf("install %s: retried with a newer Python = %v, want %v\n%s", job.Spec(), retried, c.newPy, tail(out, 2000))
 			}
 			t.Logf("installed %s under %s, bin=%s", job.Spec(), d.Name(), bin)
 		})

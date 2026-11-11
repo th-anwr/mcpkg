@@ -194,9 +194,26 @@ mkdir -p /work/app /work/home
 npm install --no-audit --no-fund --no-save --prefix /work/app "$MCPKG_SPEC"
 node -e 'const p=require("/work/app/node_modules/"+process.env.MCPKG_PKG+"/package.json");const b=p.bin;let out=[];if(typeof b==="string"){out=[process.env.MCPKG_PKG.split("/").pop()]}else if(b){out=Object.keys(b)}console.log("MCPKG_BINS="+JSON.stringify(out))'`
 
+// pypiInstallScript installs with the system Python 3.11 first, named
+// explicitly because uv otherwise prefers its own (newer) builds and would
+// change results for packages that work today. Only when uv reports that the
+// package needs a newer Python does it retry with 3.13, then 3.12, which the
+// runner image ships (issue N25).
 const pypiInstallScript = `set -e
-uv venv --quiet /work/venv
-uv pip install --quiet --python /work/venv/bin/python "$MCPKG_SPEC"
+pyinstall() {
+  rm -rf /work/venv &&
+  uv venv --quiet --python "$1" /work/venv &&
+  uv pip install --quiet --python /work/venv/bin/python "$MCPKG_SPEC"
+}
+if ! out=$(pyinstall 3.11 2>&1); then
+  printf '%s\n' "$out" >&2
+  case "$out" in
+  *"does not satisfy Python"*)
+    echo "mcpkg: package needs a newer Python; retrying with 3.13, then 3.12" >&2
+    pyinstall 3.13 || pyinstall 3.12 ;;
+  *) exit 1 ;;
+  esac
+fi
 /work/venv/bin/python -c '
 import importlib.metadata as m, json, re, os
 norm=lambda s: re.sub(r"[-_.]+","-",s).lower()
