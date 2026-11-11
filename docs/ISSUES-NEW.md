@@ -137,3 +137,20 @@ The deploy scripts assume Linux. The items below broke or needed a manual workar
 N15 to N18 could also be closed by stating in `docs/DEPLOY.md` that only CloudShell or Linux is supported. Fixing them in code is about ten lines in `lib.sh` plus one `.gitattributes` file.
 
 **Not verified yet:** smoke test results. When this was written, both workers were still on the security stage. Check that the smoke "works" count in `status.sh` rises over the next few hours.
+
+### 6.1 Fix status (2026-11-11)
+
+Fixed in `8aba0db` and `879312b`. CI run 43004024867 on `879312b` is green: `go` (including the new stage tests and the Postgres end-to-end suite), `docker` and `bench-gate`. Each fix was also exercised on Windows with Git Bash against the real AWS account.
+
+| # | Status | Change | How it was tested |
+|---|---|---|---|
+| N15 | Fixed | `aws_` in `lib.sh` sets `MSYS_NO_PATHCONV=1` for each AWS CLI call. `llm-gpu-spot.sh` exports it, since it only calls `aws`. | AMI lookup through `aws_` succeeds in Git Bash with no manual setting. |
+| N16 | Fixed | `ensure_key` strips `\r` from the key material. | Created a real test key pair through `ensure_key`: 0 carriage returns, `ssh-keygen -y` parses it. The test key pair was deleted. |
+| N17 | Fixed | New `.gitattributes` (`* text=auto eol=lf`). New `require_lf_scripts` in `lib.sh`, called by `push.sh`, refuses scripts with CRLF. | A clone with `core.autocrlf=true` now gets LF scripts. An old CRLF clone of `v0.1.0` is refused, with the offending files listed. |
+| N18 | Fixed | `require_green_ci` falls back to `python` when `python3` does not run. | The gate passes in a clean `v0.1.0` clone where `python3` is the Microsoft Store alias. |
+| N19 | Fixed | `SSH_OPTS` adds `UpdateHostKeys=no`. | 20 parallel connections to the two workers, each round starting from an empty known-hosts file: 6 warnings before, 0 after. |
+| N20 | Fixed in code, **not deployed** | Health looks up npm downloads once per batch: one bulk request per 128 unscoped names, one request per scoped name, and single names use the plain endpoint because npm answers them in a different shape. | `TestNpmDownloadsBatch` and `TestNpmDownloadsBatchChunks` cover request counts, the 128-name chunk boundary, scoped names and unknown packages. The e2e npm mock now answers bulk requests. Takes effect only after a new release and a core redeploy. |
+
+| # | Sev | Finding | Status |
+|---|---|---|---|
+| N21 | Medium | Found while testing N15. With `MSYS_NO_PATHCONV=1` exported for the whole script, Git Bash also stops translating `/c/...` paths for the native `git.exe`. `git -C "$REPO_ROOT"` then fails, and `require_green_ci` silently skips its "checkout is exactly `GATE_SHA` and clean" checks and goes straight to the GitHub check. Today's first deploy ran with that variable exported by hand, so those two checks did not run. The checkout was in fact clean at `v0.1.0`. | Fixed in `879312b` by scoping the variable to `aws` calls. Verified on Windows: the gate now refuses a checkout at the wrong commit and one with an untracked file. |
