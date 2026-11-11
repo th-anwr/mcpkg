@@ -96,4 +96,22 @@ func TestDockerInstallThroughProxy(t *testing.T) {
 			t.Logf("installed %s under %s, bin=%s", job.Spec(), d.Name(), bin)
 		})
 	}
+
+	// A prebuilt native module. better-sqlite3 downloads its binary from a GitHub
+	// release during install, and GitHub redirects that download to
+	// release-assets.githubusercontent.com (issue N26). If the proxy refuses it,
+	// the install falls back to compiling, which fails: the runner has no
+	// compiler. The package has no bin, so only the install script is checked.
+	t.Run("npm-prebuilt-native", func(t *testing.T) {
+		job := Job{ID: "it-native", Kind: "npm", Package: "better-sqlite3", Version: "12.11.1"}
+		defer d.Cleanup(job)
+		if out, err := run(ctx, "docker", []string{"volume", "create", d.volume(job)}, nil, ""); err != nil {
+			t.Fatalf("volume create: %v: %s", err, out)
+		}
+		out, err := run(ctx, "docker", d.installArgs(job, proxy), nil, "")
+		if err != nil || strings.Contains(out, "statusCode=403") {
+			t.Fatalf("install %s under %s: %v (a 403 here means the proxy refused the release download)\n%s", job.Spec(), d.Name(), err, tail(out, 2000))
+		}
+		t.Logf("installed %s under %s with its prebuilt binary", job.Spec(), d.Name())
+	})
 }
