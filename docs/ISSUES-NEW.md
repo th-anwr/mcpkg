@@ -188,3 +188,5 @@ Deployment problems, with the output that shows each one, are tracked in `docs/D
 | N20 | Paced in code, **not deployed, not measured** | One request per second to `api.npmjs.org`; `NPM_API_GAP_MS` overrides. Measure with the query above after deploying to the core box. |
 | N24 | Fixed in code, not deployed | `mcpkg stats` prints `broken` and `install failed` separately. |
 | N23 | Open | Not touched. |
+
+N25 (Medium, open, 2026-11-11): the sandbox runner image has Python 3.11.2, so PyPI servers that require Python 3.12 or newer are recorded as `install_failed`. Evidence and fix: `docs/DEPLOYMENT_ISSUES.md`, section on the `v0.1.2` deploy.

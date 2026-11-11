@@ -10,6 +10,7 @@ No secrets, account IDs or private keys belong in this file: the repository is p
 |---|---|---|---|---|
 | 2026-11-11 09:42 | `v0.1.0` (`a6dab94`) | core t4g.small on-demand, 2 × c7a.xlarge spot workers | Windows 11, Git Bash | Up. Needed four manual workarounds (N15 to N18). |
 | 2026-11-11 10:44 | `v0.1.1` (`d0a207c`) | core only | Windows 11, Git Bash | Up on the first try with no workarounds. Database container untouched. |
+| 2026-11-11 11:45 | `v0.1.2` (`fe01f26`, PR #2) | core and the remaining spot worker, in parallel | Windows 11, Git Bash | Up. Fixes N22, N20 and N24, all verified in production (see below). 328 wrongly failed tools re-queued. |
 
 Site: `http://23.23.102.237` (plain HTTP, no domain yet). Checks after each deploy:
 
@@ -22,10 +23,11 @@ ok
 
 | # | Severity | Issue | Status |
 |---|---|---|---|
-| N22 | **High** | Smoke installs fail for every npm and PyPI server under gVisor | Fixed in code (PR #2), tested under gVisor in CI. **Not deployed.** |
-| N20 | Medium | npm downloads API rate limits (HTTP 429) | Pacing added (PR #2). **Not deployed, not measured.** |
-| N23 | Medium | Spot worker reclaimed 38 minutes after launch | **Open** |
-| N24 | Low | `status.sh` counts install failures as "broken" | Fixed in code (PR #2). Not deployed. |
+| N22 | **High** | Smoke installs fail for every npm and PyPI server under gVisor | Fixed in `v0.1.2`, verified in production |
+| N20 | Medium | npm downloads API rate limits (HTTP 429) | Fixed in `v0.1.2`: 429s down from 293–465 to 62 per 10 minutes |
+| N23 | Medium | Spot worker reclaimed 38 minutes after launch | **Open**: one worker left |
+| N24 | Low | `status.sh` counts install failures as "broken" | Fixed in `v0.1.2` |
+| N25 | Medium | Sandbox Python 3.11 fails packages that need Python 3.12 or newer | **Open** |
 | N21 | Medium | Deploy gate skipped its checkout checks on Windows | Fixed in `879312b` |
 | N15 | Medium | Git Bash rewrote AWS parameter names | Fixed in `879312b` |
 | N16 | Medium | SSH key saved with Windows line endings | Fixed in `8aba0db` |
@@ -244,3 +246,80 @@ Harmless, but it appeared when two workers were pushed at once. Fixed in `8aba0d
 old: 6 known_hosts warnings in 5 rounds of 4 parallel connections
 new: 0 known_hosts warnings in 5 rounds of 4 parallel connections
 ```
+
+## `v0.1.2` deploy and production checks (2026-11-11 11:45 UTC)
+
+CI on `fe01f26` was green for `go`, `docker`, `bench-gate` and the new `sandbox-e2e` job. The `release` workflow published all three images for amd64 and arm64. The core box and the worker were deployed in parallel with `GATE_SHA=v0.1.2 ./deploy/aws/push.sh`, and the database container was not restarted.
+
+### N22: sandbox installs under gVisor
+
+The install path, tested on the worker with the `v0.1.2` runner image under `runsc` on the egress network, with the proxy given by address as the new code does:
+
+```
+--- gVisor + proxy by address: npm
+7.0.0                                   <- npm view is-number version
+--- gVisor + proxy by address: PyPI
+pypi http 200
+--- host not on allowlist, through proxy (expect refusal)
+example.com refused: <urlopen error Tunnel connection failed: 403 Forbidden>
+--- direct, no proxy (expect no route)
+direct refused: <urlopen error [Errno -3] Temporary failure in name resolution>
+```
+
+Smoke results in the first 20 minutes after the deploy. Before it, npm and PyPI had no `works` at all:
+
+```
+ method |   smoke_status    | count
+--------+-------------------+-------
+ npm    | broken            |    11
+ npm    | install_failed    |     1
+ npm    | needs_credentials |     3
+ npm    | works             |     9
+ pypi   | broken            |    13
+ pypi   | install_failed    |     7
+ pypi   | needs_credentials |     3
+ pypi   | works             |     9
+```
+
+None of the new failures are the proxy problem. One PyPI failure with a DNS error, `iflow-mcp-asaotomo-fofamap`, was checked at 11:45:58, before the worker restarted on `v0.1.2` at 11:47:02. The others are dependency or build failures in the packages themselves, plus N25 below.
+
+The tools that had been marked wrongly were re-queued on the core box:
+
+```
+$ ./scripts/mcpkg.sh enqueue -stage smoke -smoke-status install_failed
+level=INFO msg=enqueued stage=smoke matched=328 new_jobs=328
+```
+
+They share the smoke queue (about 15,650 jobs) with everything else, so with one worker at two jobs at a time they are worked off over the following days, not hours.
+
+### N20: npm pacing
+
+| 10-minute window | npm 429 warnings | Health checks completed |
+|---|---|---|
+| Before `v0.1.1` | 293 | about 4,550 |
+| After `v0.1.1` (batching only) | 465 | about 3,575 |
+| After `v0.1.2` (batching plus one request per second) | 62 | about 2,450 |
+
+Share of checked npm tools that got a download count: 95.2% to 98.6% per 10-minute window after `v0.1.2`.
+
+To watch: health checks per 10 minutes were lower in the first window after `v0.1.2`. The cause is not measured. If it stays low, try `NPM_API_GAP_MS=500` in `.env` and compare.
+
+### N24: install failures counted separately
+
+```
+smoke: 35 works, 50 need key/auth, 32 broken, 334 install failed; 7 blocked, 249 unmaintained
+```
+
+### N25 (Medium, open): sandbox Python is too old for some PyPI servers
+
+The runner image has Python 3.11.2 (`uv 0.5.11`, Node `v22.23.4`). Packages that require Python 3.12 or newer fail to resolve and are recorded as `install_failed`, which reads as a broken package:
+
+```
+× No solution found when resolving dependencies:
+╰─▶ Because the current Python version (3.11.2) does not satisfy Python>=3.12 and basic-memory==1.0.0
+    depends on Python>=3.12, we can conclude that basic-memory==1.0.0 cannot be used.
+```
+
+6 of the 36 PyPI smoke results in the first 20 minutes after `v0.1.2` failed this way, about 1 in 6.
+
+**Fix.** Install a newer Python into the runner image at build time (for example `uv python install 3.13 3.12`), and have the PyPI install use it: pass `--python 3.13`, or retry with a newer Python when uv reports `does not satisfy Python>=`. Then re-queue the affected tools with `enqueue -stage smoke -smoke-status install_failed`.
