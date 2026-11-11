@@ -1,0 +1,4 @@
+# Check out text files with LF line endings everywhere, including Windows clones
+# with core.autocrlf=true: deploy/aws/push.sh uploads the working tree to Linux
+# boxes, where a script with CRLF line endings fails on "\r".
+* text=auto eol=lf

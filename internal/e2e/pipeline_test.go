@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -89,7 +90,17 @@ func fakeUpstream(t *testing.T, everythingVer, timeVer string) *httptest.Server 
 		_, _ = w.Write([]byte(`{"score":6.5}`))
 	})
 	mux.HandleFunc("GET /downloads/point/last-week/", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"downloads":54321}`))
+		names := strings.TrimPrefix(r.URL.Path, "/downloads/point/last-week/")
+		if !strings.Contains(names, ",") {
+			_, _ = w.Write([]byte(`{"downloads":54321}`))
+			return
+		}
+		// Bulk request (health batches unscoped npm names): one entry per name.
+		var parts []string
+		for _, n := range strings.Split(names, ",") {
+			parts = append(parts, strconv.Quote(n)+`:{"downloads":54321}`)
+		}
+		_, _ = w.Write([]byte("{" + strings.Join(parts, ",") + "}"))
 	})
 	mux.HandleFunc("POST /chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

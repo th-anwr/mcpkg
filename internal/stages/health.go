@@ -53,8 +53,17 @@ func (h *Health) Run(ctx context.Context, tools []*model.Tool) []pipeline.Result
 			return results
 		}
 	}
+	var npmPkgs []string
+	seenPkg := map[string]bool{}
+	for _, t := range tools {
+		if p, ok := firstPackage(t, "npm"); ok && !seenPkg[p.Identifier] {
+			seenPkg[p.Identifier] = true
+			npmPkgs = append(npmPkgs, p.Identifier)
+		}
+	}
+	downloads := h.npmDownloadsBatch(ctx, npmPkgs)
 	for i, t := range tools {
-		results[i] = h.one(ctx, t, repos, ghErr)
+		results[i] = h.one(ctx, t, repos, ghErr, downloads)
 	}
 	return results
 }
@@ -67,7 +76,7 @@ type GHRequest struct {
 
 func (r GHRequest) key() string { return strings.ToLower(r.Slug) + "#" + r.Subfolder }
 
-func (h *Health) one(ctx context.Context, t *model.Tool, repos map[string]*ghRepo, ghErr error) pipeline.Result {
+func (h *Health) one(ctx context.Context, t *model.Tool, repos map[string]*ghRepo, ghErr error, downloads map[string]int64) pipeline.Result {
 	now := h.D.now()
 	hl := &model.Health{Provider: "none", CheckedAt: now}
 	var notes []string
@@ -91,7 +100,7 @@ func (h *Health) one(ctx context.Context, t *model.Tool, repos map[string]*ghRep
 	}
 	downloadsKnown := false
 	if p, ok := firstPackage(t, "npm"); ok {
-		if n, err := h.npmDownloads(ctx, p.Identifier); err == nil {
+		if n, found := downloads[p.Identifier]; found {
 			hl.WeeklyDownloads, downloadsKnown = n, true
 		}
 	}
@@ -436,6 +445,49 @@ func (h *Health) npmDownloads(ctx context.Context, pkg string) (int64, error) {
 	}
 	err := h.D.HTTP.GetJSON(ctx, h.D.Cfg.NpmAPI+"/downloads/point/last-week/"+pkg, nil, &res)
 	return res.Downloads, err
+}
+
+// npmBulkMax is the most packages npm's downloads API accepts in one bulk
+// request. Bulk requests do not support scoped (@scope/name) packages.
+const npmBulkMax = 128
+
+// npmDownloadsBatch looks up last-week downloads for many npm packages with
+// as few requests as possible: one bulk request per 128 unscoped names, and
+// one request per scoped name. A package is missing from the result when its
+// lookup failed or npm does not know it, which leaves its count unknown.
+func (h *Health) npmDownloadsBatch(ctx context.Context, pkgs []string) map[string]int64 {
+	out := map[string]int64{}
+	var unscoped []string
+	for _, p := range pkgs {
+		if strings.HasPrefix(p, "@") {
+			if n, err := h.npmDownloads(ctx, p); err == nil {
+				out[p] = n
+			}
+			continue
+		}
+		unscoped = append(unscoped, p)
+	}
+	for start := 0; start < len(unscoped); start += npmBulkMax {
+		chunk := unscoped[start:min(start+npmBulkMax, len(unscoped))]
+		if len(chunk) == 1 { // npm answers a single name in the non-bulk shape
+			if n, err := h.npmDownloads(ctx, chunk[0]); err == nil {
+				out[chunk[0]] = n
+			}
+			continue
+		}
+		var res map[string]*struct {
+			Downloads int64 `json:"downloads"`
+		}
+		if err := h.D.HTTP.GetJSON(ctx, h.D.Cfg.NpmAPI+"/downloads/point/last-week/"+strings.Join(chunk, ","), nil, &res); err != nil {
+			continue
+		}
+		for _, p := range chunk {
+			if r := res[p]; r != nil { // null: npm does not know the package
+				out[p] = r.Downloads
+			}
+		}
+	}
+	return out
 }
 
 var readmeNames = []string{"README.md", "readme.md", "Readme.md", "README.rst"}

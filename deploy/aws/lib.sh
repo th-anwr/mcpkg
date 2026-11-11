@@ -4,13 +4,19 @@
 # the core box's IPs; CloudShell keeps $HOME between sessions.
 # shellcheck disable=SC2034  # variables are used by the scripts that source this file
 
+# Git Bash on Windows rewrites arguments that look like paths ("/aws/service/...",
+# "DeviceName=/dev/sda1") before they reach the native aws.exe. Linux ignores this.
+export MSYS_NO_PATHCONV=1
+
 REGION="${REGION:-us-east-1}"
 KEY_NAME="${KEY_NAME:-mcpkg}"
 KEY_FILE="${KEY_FILE:-$HOME/.ssh/$KEY_NAME.pem}"
 SG_NAME="${SG_NAME:-mcpkg}"
 STATE_DIR="${STATE_DIR:-$HOME/.mcpkg}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SSH_OPTS=(-i "$KEY_FILE" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=30 -o LogLevel=ERROR)
+# UpdateHostKeys=no: parallel pushes (two workers at once) otherwise race to
+# rewrite ~/.ssh/known_hosts. New hosts are still appended (accept-new).
+SSH_OPTS=(-i "$KEY_FILE" -o StrictHostKeyChecking=accept-new -o UpdateHostKeys=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o LogLevel=ERROR)
 
 aws_() { aws --region "$REGION" "$@"; }
 
@@ -25,7 +31,8 @@ ensure_key() {
   fi
   mkdir -p "$(dirname "$KEY_FILE")"
   log "creating key pair $KEY_NAME -> $KEY_FILE"
-  aws_ ec2 create-key-pair --key-name "$KEY_NAME" --key-type ed25519 --query KeyMaterial --output text > "$KEY_FILE"
+  # tr: the Windows AWS CLI prints CRLF line endings, which ssh rejects as "invalid format".
+  aws_ ec2 create-key-pair --key-name "$KEY_NAME" --key-type ed25519 --query KeyMaterial --output text | tr -d '\r' > "$KEY_FILE"
   chmod 600 "$KEY_FILE"
 }
 
@@ -125,7 +132,9 @@ require_green_ci() {
   [ -n "${GATE_TOKEN:-}" ] && hdr+=(-H "Authorization: Bearer $GATE_TOKEN")
   json="$(curl -fsS -m 20 "${hdr[@]}" "https://api.github.com/repos/$repo/commits/$sha/check-runs?per_page=100")" \
     || die "could not read CI results for $ref from GitHub ($repo). Private repo? set GATE_TOKEN"
-  printf '%s' "$json" | python3 -c '
+  local py=python3
+  "$py" -c '' 2>/dev/null || py=python # on Windows, python3 is often the Microsoft Store alias
+  printf '%s' "$json" | "$py" -c '
 import json, sys
 ref, need = sys.argv[1], [c for c in sys.argv[2].split(",") if c]
 latest = {}
@@ -148,4 +157,15 @@ if bad:
     sys.exit("deploy gate RED for %s: %s" % (ref, "; ".join(bad)))
 print("deploy gate green for %s: %s" % (ref, ", ".join(need)))
 ' "$ref" "$checks" || die "deploy blocked: fix CI for $ref first (or GATE_OVERRIDE=<reason>)"
+}
+
+# require_lf_scripts stops a deploy whose scripts have Windows (CRLF) line
+# endings. push.sh uploads the working tree as is, and bash on the box fails on
+# "\r". A clone made with core.autocrlf=true looks clean to git but has them;
+# .gitattributes prevents that for new clones, this catches older ones.
+require_lf_scripts() {
+  command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  local bad
+  bad="$(git -C "$REPO_ROOT" ls-files --eol -- '*.sh' '*.conf' '*.yml' 'deploy/Caddyfile' | awk '$2 ~ /^w\/(crlf|mixed)$/ {print $NF}')"
+  [ -z "$bad" ] || die "Windows line endings in: $(echo "$bad" | tr '\n' ' ')- re-clone with: git clone -c core.autocrlf=false <repo>"
 }

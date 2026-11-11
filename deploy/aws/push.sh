@@ -15,6 +15,7 @@ cd "$REPO_ROOT"
 
 # Deploy gate (docs/BENCH_GATE.md): only commits whose CI passed on GitHub.
 require_green_ci
+require_lf_scripts
 IMG="$(env_value .env MCPKG_IMAGE || true)"
 if [ -n "$IMG" ] && [ -n "${GATE_SHA:-}" ] && [ "${IMG##*:}" != "$GATE_SHA" ] && [ "${IMG##*:}" != "sha-${GATE_SHA:0:12}" ]; then
   log "warning: .env runs image tag ${IMG##*:} but GATE_SHA is $GATE_SHA (set MCPKG_IMAGE, MCPKG_PROXY_IMAGE, SANDBOX_IMAGE to the same tag)"

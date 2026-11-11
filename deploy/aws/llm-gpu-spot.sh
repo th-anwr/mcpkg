@@ -9,6 +9,7 @@
 #   KEY_NAME=my-key ./deploy/aws/llm-gpu-spot.sh
 # Then set on the workers: LLM_BASE_URL=http://<private-ip>:8000/v1  LLM_MODEL=$MODEL
 set -euo pipefail
+export MSYS_NO_PATHCONV=1 # Git Bash on Windows: keep "/aws/service/..." from becoming a Windows path
 REGION="${REGION:-us-east-1}"
 KEY_NAME="${KEY_NAME:?set KEY_NAME}"
 MODEL="${MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}"   # T4-friendly (AWQ int4, fp16 compute); try Qwen3 8B AWQ too
