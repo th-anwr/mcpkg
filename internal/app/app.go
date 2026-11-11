@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -57,6 +58,9 @@ func New(cfg config.Config, log *slog.Logger, conn *sql.DB, pipe pipeline.Config
 	q.Log = log.With("component", "queue")
 	h := httpx.New(cfg.UserAgent)
 	h.Log = log.With("component", "http")
+	if u, err := url.Parse(cfg.NpmAPI); err == nil && u.Hostname() != "" && cfg.NpmAPIGapMs > 0 {
+		h.SetRate(u.Hostname(), time.Duration(cfg.NpmAPIGapMs)*time.Millisecond)
+	}
 	st := store.New(conn)
 	st.Log = log.With("component", "store")
 	return &App{Cfg: cfg, Log: log, DB: conn, Store: st, Queue: q, HTTP: h, Pipe: pipe}

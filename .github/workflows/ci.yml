@@ -63,6 +63,54 @@ jobs:
       - name: egress proxy image
         run: docker build -f sandbox/proxy.Dockerfile -t mcpkg-egress-proxy:ci sandbox
 
+  # Real installs in the Docker sandbox through the egress proxy, under plain
+  # runc and under gVisor (the production runtime, SANDBOX_RUNTIME=runsc).
+  # The only test of the sandbox network path: under gVisor a proxy given by
+  # name does not resolve (issue N22). Not part of the deploy gate.
+  sandbox-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: build runner and proxy images
+        run: |
+          docker build -q -f sandbox/runner.Dockerfile -t mcpkg-runner:ci sandbox
+          docker build -q -f sandbox/proxy.Dockerfile -t mcpkg-egress-proxy:ci sandbox
+      - name: install gVisor (same packages as deploy/aws/bootstrap.sh)
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor --yes -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+            | sudo tee /etc/apt/sources.list.d/gvisor.list >/dev/null
+          sudo apt-get update -y -qq && sudo apt-get install -y -qq runsc
+          sudo runsc install
+          sudo systemctl restart docker
+          docker info --format 'docker {{.ServerVersion}}, runtimes: {{range $k, $v := .Runtimes}}{{$k}} {{end}}'
+          runsc --version | head -1
+      - name: start the egress proxy the way compose does (default + internal network)
+        run: |
+          docker network create --internal mcpkg-egress
+          docker run -d --name mcpkg-egress-proxy-1 mcpkg-egress-proxy:ci
+          docker network connect --alias egress-proxy mcpkg-egress mcpkg-egress-proxy-1
+          sleep 3
+          docker ps --format '{{.Names}} {{.Status}}'
+      - name: sandbox installs under runc
+        run: go test ./internal/sandbox -run TestDockerInstallThroughProxy -v -count=1 -timeout 10m
+        env:
+          SANDBOX_DOCKER_TEST: "1"
+          SANDBOX_IMAGE: mcpkg-runner:ci
+      - name: sandbox installs under gVisor
+        run: go test ./internal/sandbox -run TestDockerInstallThroughProxy -v -count=1 -timeout 10m
+        env:
+          SANDBOX_DOCKER_TEST: "1"
+          SANDBOX_IMAGE: mcpkg-runner:ci
+          SANDBOX_RUNTIME: runsc
+      - name: proxy log
+        if: always()
+        run: docker exec mcpkg-egress-proxy-1 sh -c 'tail -n 20 /var/log/squid/access.log' || docker logs --tail 30 mcpkg-egress-proxy-1
+
   # Full pipeline against real npm/PyPI/GitHub, on a schedule or by hand.
   # Deliberately not on every push: real package installs are slow and flaky.
   e2e-network:

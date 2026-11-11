@@ -26,6 +26,7 @@ type Config struct {
 	RawGitHub    string
 	NpmRegistry  string
 	NpmAPI       string
+	NpmAPIGapMs  int // minimum gap between npm downloads-API requests; 0 keeps the built-in 1s
 	JsDelivr     string
 	PyPIURL      string
 	CratesAPI    string
@@ -79,6 +80,7 @@ func Load() Config {
 		RawGitHub:    strings.TrimRight(env("RAW_GITHUB", "https://raw.githubusercontent.com"), "/"),
 		NpmRegistry:  strings.TrimRight(env("NPM_REGISTRY", "https://registry.npmjs.org"), "/"),
 		NpmAPI:       strings.TrimRight(env("NPM_API", "https://api.npmjs.org"), "/"),
+		NpmAPIGapMs:  envInt("NPM_API_GAP_MS", 0),
 		JsDelivr:     strings.TrimRight(env("JSDELIVR", "https://cdn.jsdelivr.net"), "/"),
 		PyPIURL:      strings.TrimRight(env("PYPI_URL", "https://pypi.org"), "/"),
 		CratesAPI:    strings.TrimRight(env("CRATES_API", "https://crates.io"), "/"),
