@@ -531,16 +531,17 @@ func (s *Store) CategoryCounts(ctx context.Context) ([]CategoryCount, error) {
 
 // Stats are headline numbers for the home page and `mcpkg stats`.
 type Stats struct {
-	Total        int
-	Listed       int
-	Verified     int
-	Works        int
-	NeedsKey     int
-	Broken       int
-	Blocked      int
-	Unmaintained int
-	Pending      int
-	BySource     map[string]int
+	Total         int
+	Listed        int
+	Verified      int
+	Works         int
+	NeedsKey      int
+	Broken        int // fail to start: broken plus install_failed
+	InstallFailed int // the install_failed part of Broken
+	Blocked       int
+	Unmaintained  int
+	Pending       int
+	BySource      map[string]int
 }
 
 // Stats computes catalog-wide counts.
@@ -552,10 +553,11 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		count(*) FILTER (WHERE smoke_status='works'),
 		count(*) FILTER (WHERE smoke_status IN ('needs_credentials','auth_required')),
 		count(*) FILTER (WHERE smoke_status IN ('broken','install_failed')),
+		count(*) FILTER (WHERE smoke_status='install_failed'),
 		count(*) FILTER (WHERE status='blocked'),
 		count(*) FILTER (WHERE status='unmaintained'),
 		count(*) FILTER (WHERE verified_at IS NULL)
-		FROM tools`).Scan(&st.Total, &st.Listed, &st.Verified, &st.Works, &st.NeedsKey, &st.Broken, &st.Blocked, &st.Unmaintained, &st.Pending)
+		FROM tools`).Scan(&st.Total, &st.Listed, &st.Verified, &st.Works, &st.NeedsKey, &st.Broken, &st.InstallFailed, &st.Blocked, &st.Unmaintained, &st.Pending)
 	if err != nil {
 		s.warn("stats", err)
 		return st, err

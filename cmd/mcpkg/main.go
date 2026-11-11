@@ -452,7 +452,8 @@ func cmdStats(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 	fmt.Printf("tools: %d total, %d listed, %d verified, %d pending\n", st.Total, st.Listed, st.Verified, st.Pending)
-	fmt.Printf("smoke: %d works, %d need key/auth, %d broken; %d blocked, %d unmaintained\n", st.Works, st.NeedsKey, st.Broken, st.Blocked, st.Unmaintained)
+	fmt.Printf("smoke: %d works, %d need key/auth, %d broken, %d install failed; %d blocked, %d unmaintained\n",
+		st.Works, st.NeedsKey, st.Broken-st.InstallFailed, st.InstallFailed, st.Blocked, st.Unmaintained)
 	fmt.Printf("by source: %v\n", st.BySource)
 	qs, err := a.Queue.Stats(ctx)
 	if err != nil {

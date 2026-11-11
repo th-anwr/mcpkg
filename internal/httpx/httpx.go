@@ -44,6 +44,9 @@ func New(userAgent string) *Client {
 			"crates.io":      1100 * time.Millisecond, // crates.io crawler policy: 1 req/s
 			"pypi.org":       50 * time.Millisecond,
 			"api.github.com": 50 * time.Millisecond,
+			// npm's downloads API answers 429 to bursts, and scoped packages
+			// (most MCP servers) need one request each. Override: NPM_API_GAP_MS.
+			"api.npmjs.org": time.Second,
 		},
 	}
 }

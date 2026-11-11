@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mcpkg/mcpkg/internal/launch"
@@ -19,10 +22,128 @@ type DockerRunner struct {
 	Image         string // mcpkg-runner image (node + python + uv, non-root user)
 	Runtime       string // "" or "runsc" (gVisor)
 	EgressNetwork string // network whose only exit is the allowlist proxy
-	Proxy         string // http://egress-proxy:3128
+	Proxy         string // http://egress-proxy:3128; a name is resolved to its address on EgressNetwork
 	Memory        string
 	CPUs          string
 	Log           *slog.Logger // optional: container lifecycle
+
+	proxyMu  sync.Mutex
+	proxyURL string // Proxy with the name replaced by the proxy container's address
+	proxyAt  time.Time
+}
+
+// proxyTTL is how long a resolved proxy address is reused before asking Docker again.
+const proxyTTL = time.Minute
+
+// sandboxProxy returns the proxy URL to hand to install containers.
+//
+// A proxy given by name (the default, "egress-proxy") only resolves through
+// Docker's embedded DNS server at 127.0.0.11. gVisor's network stack cannot
+// reach that server, so under runsc every install failed with
+// "getaddrinfo EAI_AGAIN egress-proxy". The name is therefore replaced by the
+// address the proxy container has on the egress network, which needs no DNS.
+func (d *DockerRunner) sandboxProxy(ctx context.Context) (string, error) {
+	u, err := url.Parse(d.Proxy)
+	if err != nil || u.Hostname() == "" {
+		return "", fmt.Errorf("SANDBOX_PROXY %q is not a URL", d.Proxy)
+	}
+	host := u.Hostname()
+	if net.ParseIP(host) != nil {
+		return d.Proxy, nil
+	}
+	d.proxyMu.Lock()
+	defer d.proxyMu.Unlock()
+	if d.proxyURL != "" && time.Since(d.proxyAt) < proxyTTL {
+		return d.proxyURL, nil
+	}
+	ids, err := run(ctx, "docker", []string{"ps", "-q", "--filter", "network=" + d.EgressNetwork}, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("list containers on %s: %v: %s", d.EgressNetwork, err, tail(ids, 200))
+	}
+	if len(strings.Fields(ids)) == 0 {
+		return "", fmt.Errorf("no container is running on network %s (is %s up?)", d.EgressNetwork, host)
+	}
+	args := append([]string{"inspect", "--format", "{{json .NetworkSettings.Networks}}"}, strings.Fields(ids)...)
+	out, err := run(ctx, "docker", args, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("inspect containers on %s: %v: %s", d.EgressNetwork, err, tail(out, 200))
+	}
+	ip := proxyIP(out, d.EgressNetwork, host)
+	if ip == "" {
+		return "", fmt.Errorf("no container on network %s answers to %q", d.EgressNetwork, host)
+	}
+	d.proxyURL, d.proxyAt = withHost(u, ip), time.Now()
+	d.info("sandbox proxy resolved", "name", host, "address", ip, "network", d.EgressNetwork)
+	return d.proxyURL, nil
+}
+
+func (d *DockerRunner) forgetProxy() {
+	d.proxyMu.Lock()
+	d.proxyURL = ""
+	d.proxyMu.Unlock()
+}
+
+// proxyIP finds, in `docker inspect --format '{{json .NetworkSettings.Networks}}'`
+// output (one JSON object per container), the address on network of the
+// container that answers to host there (a compose service name or alias).
+func proxyIP(inspectOut, network, host string) string {
+	for _, line := range strings.Split(inspectOut, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var nets map[string]struct {
+			IPAddress string
+			Aliases   []string
+			DNSNames  []string
+		}
+		if err := json.Unmarshal([]byte(line), &nets); err != nil {
+			continue
+		}
+		n, ok := nets[network]
+		if !ok || net.ParseIP(n.IPAddress) == nil {
+			continue
+		}
+		names := append(append([]string{}, n.Aliases...), n.DNSNames...)
+		for _, name := range names {
+			if strings.EqualFold(name, host) {
+				return n.IPAddress
+			}
+		}
+	}
+	return ""
+}
+
+// withHost returns u with its host replaced by ip, keeping scheme, port and credentials.
+func withHost(u *url.URL, ip string) string {
+	c := *u
+	switch port := u.Port(); {
+	case port != "":
+		c.Host = net.JoinHostPort(ip, port)
+	case strings.Contains(ip, ":"):
+		c.Host = "[" + ip + "]"
+	default:
+		c.Host = ip
+	}
+	return c.String()
+}
+
+// proxyUnreachable reports install output that shows the sandbox could not
+// reach the egress proxy itself. That is our infrastructure, not the package.
+func proxyUnreachable(out string, proxies ...string) bool {
+	for _, p := range proxies {
+		u, err := url.Parse(p)
+		if err != nil || u.Hostname() == "" {
+			continue
+		}
+		for _, sig := range []string{"EAI_AGAIN " + u.Hostname(), "ENOTFOUND " + u.Hostname(),
+			"ECONNREFUSED " + u.Host, "EHOSTUNREACH " + u.Host, "ETIMEDOUT " + u.Host} {
+			if strings.Contains(out, sig) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (d *DockerRunner) info(msg string, args ...any) {
@@ -86,15 +207,19 @@ for d in m.distributions():
         break
 '`
 
-// InstallArgs builds the `docker run` argv for the install phase (exported for tests).
-func (d *DockerRunner) InstallArgs(job Job) []string {
+// InstallArgs builds the `docker run` argv for the install phase with the
+// proxy exactly as configured (exported for tests).
+func (d *DockerRunner) InstallArgs(job Job) []string { return d.installArgs(job, d.Proxy) }
+
+// installArgs is InstallArgs with the proxy URL the sandbox should use.
+func (d *DockerRunner) installArgs(job Job, proxy string) []string {
 	script := npmInstallScript
 	if job.Kind == "pypi" {
 		script = pypiInstallScript
 	}
 	args := []string{"run", "--rm", "--name", "mcpkg-install-" + job.ID,
 		"--network", d.EgressNetwork,
-		"-e", "HTTPS_PROXY=" + d.Proxy, "-e", "HTTP_PROXY=" + d.Proxy, "-e", "NO_PROXY=localhost",
+		"-e", "HTTPS_PROXY=" + proxy, "-e", "HTTP_PROXY=" + proxy, "-e", "NO_PROXY=localhost",
 		"-e", "npm_config_cache=/work/npm-cache", "-e", "npm_config_update_notifier=false",
 		"-e", "UV_CACHE_DIR=/work/uv-cache", "-e", "UV_PYTHON_DOWNLOADS=never",
 		"-e", "HOME=/work/home", "-e", "MCPKG_SPEC=" + job.Spec(), "-e", "MCPKG_PKG=" + job.Package,
@@ -150,11 +275,25 @@ func (d *DockerRunner) Install(ctx context.Context, job Job) (string, string, er
 		}
 		return "", out, nil
 	}
+	proxy, perr := d.sandboxProxy(ctx)
+	if perr != nil {
+		if d.Runtime != "" {
+			// gVisor cannot resolve the proxy by name: retry later instead of
+			// recording a failure the package did not cause.
+			return "", "", fmt.Errorf("%w: egress proxy: %v", ErrInfra, perr)
+		}
+		// Plain runc resolves the name through Docker's embedded DNS.
+		if d.Log != nil {
+			d.Log.Warn("sandbox proxy not resolved, using the configured name", "proxy", d.Proxy, "err", perr)
+		}
+		proxy = d.Proxy
+	}
 	start := time.Now()
-	out, err := run(ctx, "docker", d.InstallArgs(job), nil, "")
+	out, err := run(ctx, "docker", d.installArgs(job, proxy), nil, "")
 	d.info("sandbox install", "job", job.ID, "package", job.Package, "kind", job.Kind, "exit", exitCode(err), "ms", time.Since(start).Milliseconds())
 	if err != nil {
-		if infraProblem(out) {
+		d.forgetProxy() // the proxy may have moved: ask Docker again next time
+		if infraProblem(out) || proxyUnreachable(out, proxy, d.Proxy) {
 			return "", out, fmt.Errorf("%w: %v: %s", ErrInfra, err, tail(out, 300))
 		}
 		return "", out, fmt.Errorf("%w: %v", ErrInstall, err)
