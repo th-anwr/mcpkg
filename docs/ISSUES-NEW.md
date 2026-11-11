@@ -118,3 +118,22 @@ Code quality does not block the first deploy. N11 was the only blocker and is fi
 Next, in order: protect `main` (N12), tag `v0.1.0` on a commit at or after `1bb546c`, let `release.yml` finish and make the three packages public (N13), then follow section 12.7 of `docs/ISSUES.md`.
 
 Still open by decision: N8 (Semgrep license, off by default), issue 43 (log-only), issue 1 (cleartext admin password until TLS), tier-2 gates B6 to B8 before public DNS, and the first real AWS run itself.
+
+## 6. First real deploy (2026-11-11, from Windows)
+
+`v0.1.0` was deployed from a Windows laptop with Git Bash instead of CloudShell: the core box plus two `c7a.xlarge` spot workers. The deploy gate passed, `/healthz` returns `ok`, both workers run security scans, and gVisor is installed. A nightly backup is set up and its first run succeeded.
+
+The deploy scripts assume Linux. The items below broke or needed a manual workaround. None of them affect a CloudShell deploy.
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| N15 | Medium | `launch.sh` fails with `ParameterNotFound` from Git Bash. MSYS rewrites the SSM name `/aws/service/canonical/...` into a Windows path before it reaches the native `aws.exe`. Other arguments that contain `/...`, such as `DeviceName=/dev/sda1`, are at the same risk. | Add `export MSYS_NO_PATHCONV=1` near the top of `deploy/aws/lib.sh`. Linux ignores it. |
+| N16 | Medium | `ensure_key` (`deploy/aws/lib.sh` line 28) writes the key exactly as the Windows AWS CLI prints it, with CRLF line endings. ssh then rejects it: `Load key ... invalid format`. | Pipe the key material through `tr -d '\r'` before writing `$KEY_FILE`. |
+| N17 | Medium | The repo has no `.gitattributes`. Git for Windows defaults to `core.autocrlf=true`, so a normal clone converts every script to CRLF. `push.sh` tars the working tree as it is, and `bootstrap.sh` then fails on the box with `$'\r': command not found`. The deploy gate does not catch this, because git still reports a clean tree. | Add `.gitattributes` with `* text=auto eol=lf`. Optionally make `push.sh` refuse to run when any `*.sh` file contains `\r`. |
+| N18 | Low | `require_green_ci` (`deploy/aws/lib.sh` line 128) runs `python3`. On Windows that name is the Microsoft Store alias, which exits with "Python was not found", so the gate fails even when Python is installed. | Use `python3` when `python3 -c ''` succeeds, and fall back to `python`. |
+| N19 | Low | Two `push.sh` runs in parallel race on `~/.ssh/known_hosts` and print `hostfile_replace_entries failed ... Permission denied`. The warning is harmless, and both pushes succeeded. | Use a known-hosts file under `$STATE_DIR`, or document that worker pushes run one at a time. |
+| N20 | Medium | During the first pass, with about 48,600 tools discovered, the light worker hits HTTP 429 from `api.npmjs.org` continuously. `internal/stages/health.go` line 437 requests `/downloads/point/last-week/<pkg>` once per package. The backoff works, but npm download counts lag the rest of the catalog. | Batch unscoped packages: npm's bulk endpoint takes up to 128 comma-separated names per request. Scoped packages still need one request each. |
+
+N15 to N18 could also be closed by stating in `docs/DEPLOY.md` that only CloudShell or Linux is supported. Fixing them in code is about ten lines in `lib.sh` plus one `.gitattributes` file.
+
+**Not verified yet:** smoke test results. When this was written, both workers were still on the security stage. Check that the smoke "works" count in `status.sh` rises over the next few hours.
