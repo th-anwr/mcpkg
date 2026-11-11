@@ -29,6 +29,8 @@ ok
 | N23 | Medium | Spot worker reclaimed 38 minutes after launch | **Open**: one worker left |
 | N24 | Low | `status.sh` counts install failures as "broken" | Fixed in `v0.1.2` |
 | N25 | Medium | Sandbox Python 3.11 fails packages that need Python 3.12 or newer | Fixed in `v0.1.3`, verified in production |
+| N26 | Medium | Proxy blocks GitHub release downloads, so npm packages with prebuilt native modules fail to install | **Open** |
+| N27 | Low | Smoke test picks a CLI entry point that prints help and exits, recorded as "broken" | **Open** |
 | N21 | Medium | Deploy gate skipped its checkout checks on Windows | Fixed in `879312b` |
 | N15 | Medium | Git Bash rewrote AWS parameter names | Fixed in `879312b` |
 | N16 | Medium | SSH key saved with Windows line endings | Fixed in `8aba0db` |
@@ -379,3 +381,47 @@ level=INFO msg=enqueued stage=smoke matched=355 new_jobs=27
 
 - Failed installs are retried automatically every week. After rendering a tool, the pipeline schedules its next full check, smoke test included, seven days later (`recheck.health_every_days` in `pipeline.json`). This applies to every tool that is not blocked.
 - Jobs queued by hand with `./scripts/mcpkg.sh enqueue` get priority 0, the lowest. New tools are ordered by popularity, and within a priority level older jobs go first, so re-queued failures run after everything already waiting and do not hold up the worker.
+
+## Checks after `v0.1.3` (2026-11-11, about 13:00 UTC)
+
+No errors or panics on either box since the deploy. The site returned no 5xx responses, and no sandbox containers or volumes were left behind. Core: disk 26% used, 1 GB of memory free, load 0.3. Worker: disk 32% used, load about 5 on 4 vCPUs, so the worker is fully busy and running more smoke jobs per worker would not help much. One security job died on `extract wheel: archive exceeds extraction limits`, which is the size cap working as intended.
+
+Smoke results in the first 30 minutes after `v0.1.3`:
+
+```
+ npm    works 53   broken 13   needs_credentials 3   install_failed 7
+ pypi   works  7   broken 33   needs_credentials 3   install_failed 3
+ oci    works  3   broken  2
+ remote works  4   broken  1   auth_required 8
+```
+
+### N26 (Medium, open): proxy blocks GitHub release downloads
+
+npm packages with native modules (`better-sqlite3`, `keytar`) download a prebuilt binary from a GitHub release during install. GitHub now redirects release downloads to `release-assets.githubusercontent.com`, which is not on the allowlist, so the proxy refuses it. The install then falls back to compiling from source, which fails because the runner image has no compiler:
+
+```
+npm error path /work/app/node_modules/better-sqlite3
+npm error command sh -c prebuild-install || node-gyp rebuild --release
+npm error prebuild-install warn install tunneling socket could not be established, statusCode=403
+```
+
+Refused hosts in the proxy log since the deploy:
+
+```
+     13 release-assets.githubusercontent.com
+      7 nodejs.org
+```
+
+`nodejs.org` is the source-build fallback fetching Node headers. It would not help without a compiler. Affected so far: 5 of 76 npm smoke results (about 7%), all marked `install_failed` although the package is fine.
+
+**Fix.** Add `release-assets.githubusercontent.com` to the `registries` ACL in `sandbox/squid.conf`. It serves the same release files that `objects.githubusercontent.com` (already allowed) used to serve. Then release, deploy the worker, and re-queue with `enqueue -stage smoke -smoke-status install_failed`. Not needed: `nodejs.org` or a compiler in the runner image, which would widen the sandbox for the fallback path only.
+
+### N27 (Low, open): CLI entry points that need a subcommand
+
+Many of the 33 PyPI "broken" results are real package problems, such as a pydantic `TypeError` inside the package, or a tool that refuses to start without a `.gitignore`. Some, though, are command-line tools whose chosen entry point prints its help and exits, because the MCP server is behind a subcommand such as `serve` or `mcp`:
+
+```
+Commands: fetch  Fetch market data and save to CSV.  list-strategies ...  run  Run a backtest ...
+```
+
+These are recorded as `broken` ("server closed the connection") although the server may work. **Fix.** When the process exits after printing a command list, retry with the package's declared arguments from the registry entry, or with a common subcommand (`serve`, `mcp`, `stdio`), before deciding `broken`. Needs care to avoid running arbitrary subcommands.
