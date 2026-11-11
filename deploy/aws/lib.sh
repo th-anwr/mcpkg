@@ -4,10 +4,6 @@
 # the core box's IPs; CloudShell keeps $HOME between sessions.
 # shellcheck disable=SC2034  # variables are used by the scripts that source this file
 
-# Git Bash on Windows rewrites arguments that look like paths ("/aws/service/...",
-# "DeviceName=/dev/sda1") before they reach the native aws.exe. Linux ignores this.
-export MSYS_NO_PATHCONV=1
-
 REGION="${REGION:-us-east-1}"
 KEY_NAME="${KEY_NAME:-mcpkg}"
 KEY_FILE="${KEY_FILE:-$HOME/.ssh/$KEY_NAME.pem}"
@@ -18,7 +14,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # rewrite ~/.ssh/known_hosts. New hosts are still appended (accept-new).
 SSH_OPTS=(-i "$KEY_FILE" -o StrictHostKeyChecking=accept-new -o UpdateHostKeys=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o LogLevel=ERROR)
 
-aws_() { aws --region "$REGION" "$@"; }
+# MSYS_NO_PATHCONV: Git Bash on Windows would rewrite arguments that look like
+# paths ("/aws/service/...", "DeviceName=/dev/sda1") before they reach the native
+# aws.exe. Set only for aws: exported globally it also stops the needed
+# /c/... -> C:\... translation for git.exe, which silently disables the deploy
+# gate's checkout checks. No aws call here takes a local file path. Linux ignores it.
+aws_() { MSYS_NO_PATHCONV=1 aws --region "$REGION" "$@"; }
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
