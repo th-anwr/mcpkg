@@ -207,7 +207,8 @@ pyinstall() {
 }
 if ! out=$(pyinstall 3.11 2>&1); then
   printf '%s\n' "$out" >&2
-  case "$out" in
+  # uv wraps its message across lines ("does not satisfy\n    Python>=3.12"), so match on collapsed whitespace.
+  case "$(printf '%s' "$out" | tr -s '[:space:]' ' ')" in
   *"does not satisfy Python"*)
     echo "mcpkg: package needs a newer Python; retrying with 3.13, then 3.12" >&2
     pyinstall 3.13 || pyinstall 3.12 ;;
