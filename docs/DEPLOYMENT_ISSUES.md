@@ -12,6 +12,7 @@ No secrets, account IDs or private keys belong in this file: the repository is p
 | 2026-11-11 10:44 | `v0.1.1` (`d0a207c`) | core only | Windows 11, Git Bash | Up on the first try with no workarounds. Database container untouched. |
 | 2026-11-11 11:45 | `v0.1.2` (`fe01f26`, PR #2) | core and the remaining spot worker, in parallel | Windows 11, Git Bash | Up. Fixes N22, N20 and N24, all verified in production (see below). 328 wrongly failed tools re-queued. |
 | 2026-11-11 12:32 | `v0.1.3` (`19fd7b8`) | core and the worker, in parallel | Windows 11, Git Bash | Up. Fixes N25, verified in production (see below). 355 `install_failed` tools queued for a new smoke test. |
+| 2026-11-23 20:53 | `v0.1.3`, restored from snapshot | core only; no workers yet | Windows 11, Git Bash | Up. AWS had suspended the account (identity verification) and terminated both boxes; the core was relaunched from AWS's snapshot of its disk. See "Account suspension and restore". |
 
 Site: `http://23.23.102.237` (plain HTTP, no domain yet). Checks after each deploy:
 
@@ -31,6 +32,8 @@ ok
 | N25 | Medium | Sandbox Python 3.11 fails packages that need Python 3.12 or newer | Fixed in `v0.1.3`, verified in production |
 | N26 | Medium | Proxy blocks GitHub release downloads, so npm packages with prebuilt native modules fail to install | **Open** |
 | N27 | Low | Smoke test picks a CLI entry point that prints help and exits, recorded as "broken" | **Open** |
+| N28 | **High** | Worker disk fills with pulled OCI images; a full disk then kills thousands of jobs | Fixed in code (`af90c76`), CI green. **Not deployed.** |
+| N29 | Low | GitHub GraphQL sometimes returns an empty success response; all 25 tools in that batch fail once | **Open** (retries cover it) |
 | N21 | Medium | Deploy gate skipped its checkout checks on Windows | Fixed in `879312b` |
 | N15 | Medium | Git Bash rewrote AWS parameter names | Fixed in `879312b` |
 | N16 | Medium | SSH key saved with Windows line endings | Fixed in `8aba0db` |
@@ -425,3 +428,96 @@ Commands: fetch  Fetch market data and save to CSV.  list-strategies ...  run  R
 ```
 
 These are recorded as `broken` ("server closed the connection") although the server may work. **Fix.** When the process exits after printing a command list, retry with the package's declared arguments from the registry entry, or with a common subcommand (`serve`, `mcp`, `stdio`), before deciding `broken`. Needs care to avoid running arbitrary subcommands.
+
+## Account suspension and restore (2026-11-11 to 2026-11-23)
+
+**What happened.** AWS suspended the account for identity verification at about 16:47 UTC on 2026-11-11. The site was unreachable from then on (checked from Hong Kong, India, Iran and Singapore). AWS terminated both instances, and their disks were deleted with them. The owner had the suspension lifted on 2026-11-23.
+
+What survived, checked 2026-11-23 20:50 UTC:
+
+```
+instances:        none
+EBS volumes:      none
+snapshot:         snap-036446467042cadfe  30 GB  2026-11-11T16:58:07Z  "AWS EBS triggered volume snapshot"  (the core's disk)
+Elastic IP:       23.23.102.237, not attached
+security group:   sg-0db485a12b20b3ae3
+key pair:         mcpkg
+account:          Paid plan, active, $132.14 credits; November usage $2.00, all covered by credits
+```
+
+**Restore.** The core was rebuilt from the snapshot, with no changes to the code or `.env`:
+
+1. Registered an arm64 AMI from the snapshot, with the boot settings of the official Ubuntu 24.04 arm64 image (UEFI, ENA, IMDSv2).
+2. Launched a t4g.small from it in us-east-1f with the old private IP `172.31.76.5`, so the database binding (`DB_BIND`) and the workers' `DATABASE_URL` stay valid.
+3. Attached the Elastic IP 23.23.102.237.
+4. Updated `~/.mcpkg/core.env` with the new instance ID, removed the old SSH host key, and allowed SSH from the laptop's new IP.
+
+Docker started the whole stack on boot. Postgres had been shut down cleanly before the snapshot, so it needed no recovery:
+
+```
+LOG:  database system was shut down at 2026-11-11 16:47:54 UTC
+LOG:  database system is ready to accept connections
+```
+
+```
+$ curl -fsS http://23.23.102.237/healthz
+ok
+ total  | fully_checked
+ 161958 |          6859
+smoke: 1198 works, 493 need key/auth, 858 broken, 528 install failed; 25 blocked, 613 unmaintained
+```
+
+Discovery resumed by itself and added about 9,400 servers in its first run.
+
+**Rules this adds.** Copy a database backup off AWS regularly: the only off-AWS copy was from the first hour. Keep the Elastic IP, because the site's address survived only because of it. A suspended account loses its instances; a snapshot is not guaranteed.
+
+### N28 (High): worker disk fills, then a full disk kills thousands of jobs
+
+**Evidence.** In the restored database, 9,494 security jobs and 1,278 smoke jobs were dead, all from a four-minute window just before the suspension:
+
+```
+ stage    | err                                                               | count | first_at            | last_at
+ smoke    | sandbox infrastructure error: docker volume create: exit status 1 |  1278 | 2026-11-11 16:43:28 | 2026-11-11 16:47:50
+ security | mkdir /tmp/mcpkg-sec-3436782377: no space left on device          |     1 | 2026-11-11 16:45:27 | 2026-11-11 16:45:27
+ ... (about 9,480 more, one per temporary directory name)
+```
+
+The worker's 40 GB disk was 32% used at 13:00 and full by 16:43.
+
+**Causes.**
+1. Every smoke test of an OCI server runs `docker pull` on the server's image, and `Cleanup` removed only the job's containers and volume, never the image. 68 OCI servers had been tested, and their images filled the remaining 26 GB. 655 more OCI servers are queued.
+2. Smoke treated sandbox infrastructure errors as "retry later", but the retry still used an attempt; security did the same for a full disk. Because every job failed instantly, each one used up its attempts within minutes and was marked dead.
+
+**Fix** (`af90c76`, CI green):
+- `DockerRunner.Cleanup` removes the job's OCI image afterwards. It is not forced, so an image another container still uses stays, and it never removes the runner image.
+- Sandbox infrastructure errors and `ENOSPC` defer the job for 10 minutes through the existing rate-limit path, which gives the attempt back (`attempts = attempts - 1`). A sick worker now delays jobs instead of killing them.
+- The pipeline's deferral warning includes the reason.
+
+Tests: unit tests for the cleanup commands and for the deferral. `sandbox-e2e` pulls `busybox:1.36.1` as an OCI job and checks that `Cleanup` removes it, under runc and gVisor:
+
+```
+pulled and removed busybox:1.36.1 under docker
+pulled and removed busybox:1.36.1 under docker+runsc
+--- PASS: TestDockerInstallThroughProxy/oci-image-removed
+```
+
+**To finish.** Release `v0.1.4` (N26 + N28), deploy the core and relaunch the workers, then re-queue the jobs the full disk killed:
+
+```sql
+UPDATE jobs SET state = 'queued', attempts = 0, run_after = now(), last_error = NULL
+WHERE state = 'dead'
+  AND (last_error LIKE '%no space left on device%'
+       OR last_error LIKE 'sandbox infrastructure error: docker volume create%');
+```
+
+### N29 (Low, open): empty GitHub GraphQL responses fail a whole batch
+
+The health stage asks GitHub's GraphQL API about 25 repositories in one request. About 2% of these requests come back with a success status and an empty body, and the JSON decode then fails all 25 tools:
+
+```
+level=WARN msg="stage failed" stage=health tool=ai2finlive.ai2fin-tax-mcp attempt=1 err="github: unexpected end of JSON input"
+```
+
+Not a quota problem (4,928 of 5,000 GraphQL points left) and not new: 196 jobs hit it on 2026-11-11 before the suspension, 75 after the restore. No job has failed with it twice: each retries in a new batch and succeeds. Likely cause: GitHub's server-side time limit on these heavy queries, which also fetch README text.
+
+**Fix.** Treat an empty or undecodable GraphQL response as retryable inside the request: retry once, then split the batch in half.
