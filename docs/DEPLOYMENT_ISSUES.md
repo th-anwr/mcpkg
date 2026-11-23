@@ -33,7 +33,7 @@ ok
 | N26 | Medium | Proxy blocks GitHub release downloads, so npm packages with prebuilt native modules fail to install | **Open** |
 | N27 | Low | Smoke test picks a CLI entry point that prints help and exits, recorded as "broken" | **Open** |
 | N28 | **High** | Worker disk fills with pulled OCI images; a full disk then kills thousands of jobs | Fixed in code (`af90c76`), CI green. **Not deployed.** |
-| N29 | Low | GitHub GraphQL sometimes returns an empty success response; all 25 tools in that batch fail once | **Open** (retries cover it) |
+| N29 | Low | GitHub GraphQL sometimes returns an empty success response; all 25 tools in that batch fail once | Fixed in code (`8c7ae64`), CI green. **Not deployed.** |
 | N21 | Medium | Deploy gate skipped its checkout checks on Windows | Fixed in `879312b` |
 | N15 | Medium | Git Bash rewrote AWS parameter names | Fixed in `879312b` |
 | N16 | Medium | SSH key saved with Windows line endings | Fixed in `8aba0db` |
@@ -520,4 +520,22 @@ level=WARN msg="stage failed" stage=health tool=ai2finlive.ai2fin-tax-mcp attemp
 
 Not a quota problem (4,928 of 5,000 GraphQL points left) and not new: 196 jobs hit it on 2026-11-11 before the suspension, 75 after the restore. No job has failed with it twice: each retries in a new batch and succeeds. Likely cause: GitHub's server-side time limit on these heavy queries, which also fetch README text.
 
-**Fix.** Treat an empty or undecodable GraphQL response as retryable inside the request: retry once, then split the batch in half.
+**Fix** (`8c7ae64`, CI green). `queryWithSplit` retries an empty answer once, then splits the batch in half until the failing part is found, so only a repository that keeps getting empty answers fails. GitHub errors are tracked per repository; rate limits and other errors keep their whole-batch behaviour. Tests cover a one-off empty answer (2 calls, all 25 succeed), one repository that always gets empty answers (24 succeed, only it fails), and a 502 (no retry, no split).
+
+## 30-minute watch of the restored core (2026-11-23 21:07 to 21:39 UTC)
+
+`ops/monitor/watch.sh` (in the owner's git-ignored `ops/` folder) sampled the core box every 5 minutes and saved every container's full logs for each window. Result: **0 alerts, no redeploy needed.**
+
+| Sample (UTC) | healthz | Health done / failed | New dead jobs | Disk | Memory free | Load |
+|---|---|---|---|---|---|---|
+| 21:07 | 200, 0.66 s | 800 / 50 | 0 | n/a | n/a | n/a |
+| 21:12 | 200, 0.63 s | 775 / 0 | 0 | 29% | 1,038 MB | 0.35 |
+| 21:17 | 200, 0.59 s | 926 / 24 | 0 | 29% | 1,042 MB | 0.33 |
+| 21:22 | 200, 0.62 s | 700 / 0 | 0 | 29% | 1,018 MB | 0.42 |
+| 21:28 | 200, 0.59 s | 900 / 0 | 0 | 29% | 1,037 MB | 0.50 |
+| 21:33 | 200, 0.67 s | 925 / 0 | 0 | 29% | 1,014 MB | 0.62 |
+| 21:38 | 200, 0.62 s | 800 / 50 | 0 | 29% | 1,018 MB | 0.35 |
+
+No container restarted, nothing logged an error or a panic, and Caddy returned no 5xx. All health failures were N29. Other warnings, all handled by backoff: npm 429s (3 to 14 per 5 minutes, N20) and three GitHub 403 secondary rate limits. The first sample has no system figures because of a bug in the watch script (fixed): `docker compose exec` read the script's own stdin.
+
+Without workers, the security queue grew from 58,482 to 63,797 as health checks finished. The catalog grew from 174,538 to 177,451 servers while discovery ran.

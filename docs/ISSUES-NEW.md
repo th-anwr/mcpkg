@@ -190,3 +190,5 @@ Deployment problems, with the output that shows each one, are tracked in `docs/D
 | N23 | Open | Not touched. |
 
 N25 (Medium, open, 2026-11-11): the sandbox runner image has Python 3.11.2, so PyPI servers that require Python 3.12 or newer are recorded as `install_failed`. Evidence and fix: `docs/DEPLOYMENT_ISSUES.md`, section on the `v0.1.2` deploy.
+
+N26 to N29 (2026-11-12 to 2026-11-23): proxy blocked GitHub release assets (N26), CLI entry points that need a subcommand (N27), worker disk filled by OCI images and a full disk killing jobs (N28), empty GitHub GraphQL answers failing whole batches (N29). N26, N28 and N29 are fixed on `main` and wait for the `v0.1.4` release. Evidence and status: `docs/DEPLOYMENT_ISSUES.md`.
