@@ -3,6 +3,7 @@ package stages
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -28,7 +29,7 @@ func (h *Health) Name() string { return "health" }
 func (h *Health) Run(ctx context.Context, tools []*model.Tool) []pipeline.Result {
 	results := make([]pipeline.Result, len(tools))
 	repos := map[string]*ghRepo{}
-	var ghErr error
+	failed := map[string]error{} // GitHub error per repository that got no answer
 	var reqs []GHRequest
 	seen := map[string]bool{}
 	for _, t := range tools {
@@ -42,15 +43,21 @@ func (h *Health) Run(ctx context.Context, tools []*model.Tool) []pipeline.Result
 	}
 	if len(reqs) > 0 {
 		if h.D.Cfg.GitHubToken != "" {
-			repos, ghErr = h.graphql(ctx, reqs)
-		} else {
-			repos, ghErr = h.rest(ctx, reqs)
-		}
-		if _, limited := queue.AsRateLimited(ghErr); limited {
-			for i := range results {
-				results[i] = pipeline.Result{Err: ghErr}
+			repos, failed = queryWithSplit(ctx, reqs, h.graphql)
+		} else if r, err := h.rest(ctx, reqs); err != nil {
+			for _, req := range reqs {
+				failed[req.key()] = err
 			}
-			return results
+		} else {
+			repos = r
+		}
+		for _, err := range failed {
+			if _, limited := queue.AsRateLimited(err); limited {
+				for i := range results {
+					results[i] = pipeline.Result{Err: err}
+				}
+				return results
+			}
 		}
 	}
 	var npmPkgs []string
@@ -63,9 +70,55 @@ func (h *Health) Run(ctx context.Context, tools []*model.Tool) []pipeline.Result
 	}
 	downloads := h.npmDownloadsBatch(ctx, npmPkgs)
 	for i, t := range tools {
+		var ghErr error
+		if r, ok := githubRepo(t); ok {
+			ghErr = failed[GHRequest{Slug: r.Slug(), Subfolder: r.Subfolder}.key()]
+		}
 		results[i] = h.one(ctx, t, repos, ghErr, downloads)
 	}
 	return results
+}
+
+// emptyGraphQL reports whether err is an empty or cut-off GraphQL answer:
+// GitHub sometimes returns a heavy batch with a success status and no body.
+func emptyGraphQL(err error) bool {
+	var se *json.SyntaxError
+	return errors.As(err, &se)
+}
+
+// queryWithSplit runs query for reqs. On an empty answer it retries once, then
+// splits the batch in half until the failing part is found, so one bad answer
+// no longer fails every tool in a batch of 25 (issue N29). failed holds the
+// error for each request that never got an answer. Any other error fails the
+// whole (sub)batch, as before.
+func queryWithSplit(ctx context.Context, reqs []GHRequest, query func(context.Context, []GHRequest) (map[string]*ghRepo, error)) (map[string]*ghRepo, map[string]error) {
+	repos, err := query(ctx, reqs)
+	if err != nil && emptyGraphQL(err) {
+		repos, err = query(ctx, reqs)
+	}
+	if err == nil {
+		if repos == nil {
+			repos = map[string]*ghRepo{}
+		}
+		return repos, map[string]error{}
+	}
+	if !emptyGraphQL(err) || len(reqs) == 1 {
+		failed := make(map[string]error, len(reqs))
+		for _, r := range reqs {
+			failed[r.key()] = err
+		}
+		return map[string]*ghRepo{}, failed
+	}
+	mid := len(reqs) / 2
+	repos, failed := queryWithSplit(ctx, reqs[:mid], query)
+	moreRepos, moreFailed := queryWithSplit(ctx, reqs[mid:], query)
+	for k, v := range moreRepos {
+		repos[k] = v
+	}
+	for k, v := range moreFailed {
+		failed[k] = v
+	}
+	return repos, failed
 }
 
 // GHRequest is one repository (plus monorepo folder) to look up.
