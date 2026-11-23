@@ -191,7 +191,7 @@ func (r *Runner) process(ctx context.Context, st Stage, sc StageConfig, jobs []q
 		res := results[i]
 		if err := r.Finish(context.Background(), st.Name(), t, res, int(elapsed.Milliseconds())/len(tools), worker); err != nil {
 			if rl, ok := queue.AsRateLimited(err); ok {
-				r.Log.Warn("rate limited, deferring", "stage", st.Name(), "tool", t.Slug, "job", j.ID, "until", rl.Until.UTC().Format(time.RFC3339))
+				r.Log.Warn("rate limited, deferring", "stage", st.Name(), "tool", t.Slug, "job", j.ID, "until", rl.Until.UTC().Format(time.RFC3339), "err", err)
 				_ = r.Queue.RetryAfter(context.Background(), j, time.Until(rl.Until)+time.Minute, err.Error())
 				continue
 			}

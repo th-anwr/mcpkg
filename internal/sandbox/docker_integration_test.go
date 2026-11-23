@@ -114,4 +114,22 @@ func TestDockerInstallThroughProxy(t *testing.T) {
 		}
 		t.Logf("installed %s under %s with its prebuilt binary", job.Spec(), d.Name())
 	})
+
+	// OCI servers: the install pulls the server's image, and Cleanup must remove
+	// it, or the worker's disk fills up (issue N28).
+	t.Run("oci-image-removed", func(t *testing.T) {
+		job := Job{ID: "it-oci", Kind: "oci", Package: "busybox:1.36.1"}
+		if _, out, err := d.Install(ctx, job); err != nil {
+			d.Cleanup(job)
+			t.Fatalf("pull %s: %v\n%s", job.Package, err, tail(out, 1000))
+		}
+		if out, err := run(ctx, "docker", []string{"image", "inspect", job.Package}, nil, ""); err != nil {
+			t.Fatalf("image %s should exist after the install: %v\n%s", job.Package, err, tail(out, 500))
+		}
+		d.Cleanup(job)
+		if _, err := run(ctx, "docker", []string{"image", "inspect", job.Package}, nil, ""); err == nil {
+			t.Errorf("image %s is still present after Cleanup", job.Package)
+		}
+		t.Logf("pulled and removed %s under %s", job.Package, d.Name())
+	})
 }

@@ -85,7 +85,7 @@ func (s *Smoke) one(ctx context.Context, t *model.Tool) pipeline.Result {
 		sm.InstallMs = time.Since(start).Milliseconds()
 		if err != nil {
 			if errors.Is(err, sandbox.ErrInfra) {
-				return pipeline.Result{Err: err} // retry later; not the tool's fault
+				return pipeline.Result{Err: deferIfInfra(err, s.D.now())} // not the tool's fault: retry later
 			}
 			sm.Status, sm.Error, sm.LogTail = "install_failed", truncate(err.Error(), 500), redact(tailString(log, 2000), job.Env)
 			break
@@ -94,7 +94,7 @@ func (s *Smoke) one(ctx context.Context, t *model.Tool) pipeline.Result {
 		proc, err := s.Runner.Start(ctx, job, bin)
 		if err != nil {
 			if errors.Is(err, sandbox.ErrInfra) {
-				return pipeline.Result{Err: err}
+				return pipeline.Result{Err: deferIfInfra(err, s.D.now())}
 			}
 			sm.Status, sm.Error = "broken", truncate(err.Error(), 500)
 			break

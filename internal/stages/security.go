@@ -58,13 +58,13 @@ func (s *Security) one(ctx context.Context, t *model.Tool) pipeline.Result {
 	}
 	dir, err := os.MkdirTemp(s.D.Cfg.WorkDir, "mcpkg-sec-*")
 	if err != nil {
-		return pipeline.Result{Err: err}
+		return pipeline.Result{Err: deferIfInfra(err, s.D.now())} // a full disk is the worker's problem
 	}
 	defer os.RemoveAll(dir)
 
 	art, err := s.fetch(ctx, t, dir)
 	if err != nil {
-		return pipeline.Result{Err: err}
+		return pipeline.Result{Err: deferIfInfra(err, s.D.now())}
 	}
 	sec.Scanned, sec.Target = art.kind, art.target
 	sec.InstallScripts, sec.EntryPoints = art.installScripts, art.entryPoints

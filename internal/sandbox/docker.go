@@ -359,10 +359,26 @@ func (d *DockerRunner) Start(ctx context.Context, job Job, bin string) (*Process
 	}, nil
 }
 
-// Cleanup implements Runner.
+// Cleanup implements Runner. It removes the job's containers and volume and,
+// for OCI servers, the image the install pulled. Those images are never reused,
+// and keeping them filled a 40 GB worker disk in about four hours (issue N28).
 func (d *DockerRunner) Cleanup(job Job) {
-	_ = exec.Command("docker", "rm", "-f", "mcpkg-run-"+job.ID, "mcpkg-install-"+job.ID).Run()
-	_ = exec.Command("docker", "volume", "rm", "-f", d.volume(job)).Run()
+	for _, args := range d.cleanupCommands(job) {
+		_ = exec.Command("docker", args...).Run()
+	}
+}
+
+// cleanupCommands lists the docker commands Cleanup runs.
+func (d *DockerRunner) cleanupCommands(job Job) [][]string {
+	cmds := [][]string{
+		{"rm", "-f", "mcpkg-run-" + job.ID, "mcpkg-install-" + job.ID},
+		{"volume", "rm", "-f", d.volume(job)},
+	}
+	if job.Kind == "oci" && job.Package != "" && job.Package != d.Image {
+		// No -f: an image another container still uses stays until its own cleanup.
+		cmds = append(cmds, []string{"image", "rm", job.Package})
+	}
+	return cmds
 }
 
 // infraProblem recognizes sandbox misconfiguration (not the tool's fault): the job is
