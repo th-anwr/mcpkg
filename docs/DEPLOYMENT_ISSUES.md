@@ -13,6 +13,7 @@ No secrets, account IDs or private keys belong in this file: the repository is p
 | 2026-11-11 11:45 | `v0.1.2` (`fe01f26`, PR #2) | core and the remaining spot worker, in parallel | Windows 11, Git Bash | Up. Fixes N22, N20 and N24, all verified in production (see below). 328 wrongly failed tools re-queued. |
 | 2026-11-11 12:32 | `v0.1.3` (`19fd7b8`) | core and the worker, in parallel | Windows 11, Git Bash | Up. Fixes N25, verified in production (see below). 355 `install_failed` tools queued for a new smoke test. |
 | 2026-11-23 20:53 | `v0.1.3`, restored from snapshot | core only; no workers yet | Windows 11, Git Bash | Up. AWS had suspended the account (identity verification) and terminated both boxes; the core was relaunched from AWS's snapshot of its disk. See "Account suspension and restore". |
+| 2026-11-24 10:53 | `v0.1.4` (`8c7ae64`) | core only; spot workers refused (N30) | Windows 11, Git Bash | Core up. Ships N26, N28 and N29. 9,330 jobs the full disk killed re-queued, plus 173 more `install_failed` smoke tests. No workers, so security and smoke are paused. See "`v0.1.4` deploy". |
 
 Site: `http://23.23.102.237` (plain HTTP, no domain yet). Checks after each deploy:
 
@@ -30,10 +31,13 @@ ok
 | N23 | Medium | Spot worker reclaimed 38 minutes after launch | **Open**: one worker left |
 | N24 | Low | `status.sh` counts install failures as "broken" | Fixed in `v0.1.2` |
 | N25 | Medium | Sandbox Python 3.11 fails packages that need Python 3.12 or newer | Fixed in `v0.1.3`, verified in production |
-| N26 | Medium | Proxy blocks GitHub release downloads, so npm packages with prebuilt native modules fail to install | **Open** |
+| N26 | Medium | Proxy blocks GitHub release downloads, so npm packages with prebuilt native modules fail to install | Fixed in `v0.1.4`; to verify on the first worker |
 | N27 | Low | Smoke test picks a CLI entry point that prints help and exits, recorded as "broken" | **Open** |
-| N28 | **High** | Worker disk fills with pulled OCI images; a full disk then kills thousands of jobs | Fixed in code (`af90c76`), CI green. **Not deployed.** |
-| N29 | Low | GitHub GraphQL sometimes returns an empty success response; all 25 tools in that batch fail once | Fixed in code (`8c7ae64`), CI green. **Not deployed.** |
+| N28 | **High** | Worker disk fills with pulled OCI images; a full disk then kills thousands of jobs | Fixed in `v0.1.4`; 9,330 killed jobs re-queued; to verify on the first worker |
+| N29 | Low | GitHub GraphQL sometimes returns an empty success response; all 25 tools in that batch fail once | Fixed in `v0.1.4`, live on the core: no empty-response errors in its first 30 minutes |
+| N30 | **High** | Spot launches refused (`MaxSpotInstanceCountExceeded`) although the spot quota is 8 vCPUs, so there are no workers | **Open**: increase to 16 vCPUs requested 2026-11-24 11:00 UTC |
+| N31 | Low | A health job dies when fetched text contains a NUL byte, which Postgres rejects | **Open**: 3 jobs |
+| N32 | Low | `push.sh` uploads untracked and git-excluded local folders (`ops/`, `.wt/`) to the box | **Open** |
 | N21 | Medium | Deploy gate skipped its checkout checks on Windows | Fixed in `879312b` |
 | N15 | Medium | Git Bash rewrote AWS parameter names | Fixed in `879312b` |
 | N16 | Medium | SSH key saved with Windows line endings | Fixed in `8aba0db` |
@@ -398,7 +402,7 @@ Smoke results in the first 30 minutes after `v0.1.3`:
  remote works  4   broken  1   auth_required 8
 ```
 
-### N26 (Medium, open): proxy blocks GitHub release downloads
+### N26 (Medium): proxy blocks GitHub release downloads
 
 npm packages with native modules (`better-sqlite3`, `keytar`) download a prebuilt binary from a GitHub release during install. GitHub now redirects release downloads to `release-assets.githubusercontent.com`, which is not on the allowlist, so the proxy refuses it. The install then falls back to compiling from source, which fails because the runner image has no compiler:
 
@@ -510,7 +514,7 @@ WHERE state = 'dead'
        OR last_error LIKE 'sandbox infrastructure error: docker volume create%');
 ```
 
-### N29 (Low, open): empty GitHub GraphQL responses fail a whole batch
+### N29 (Low): empty GitHub GraphQL responses fail a whole batch
 
 The health stage asks GitHub's GraphQL API about 25 repositories in one request. About 2% of these requests come back with a success status and an empty body, and the JSON decode then fails all 25 tools:
 
@@ -539,3 +543,86 @@ Not a quota problem (4,928 of 5,000 GraphQL points left) and not new: 196 jobs h
 No container restarted, nothing logged an error or a panic, and Caddy returned no 5xx. All health failures were N29. Other warnings, all handled by backoff: npm 429s (3 to 14 per 5 minutes, N20) and three GitHub 403 secondary rate limits. The first sample has no system figures because of a bug in the watch script (fixed): `docker compose exec` read the script's own stdin.
 
 Without workers, the security queue grew from 58,482 to 63,797 as health checks finished. The catalog grew from 174,538 to 177,451 servers while discovery ran.
+
+## `v0.1.4` deploy (2026-11-24 10:53 UTC)
+
+Release `v0.1.4` on `8c7ae64` ships N26, N28 and N29. All three images are public for amd64 and arm64. The core runs it:
+
+```
+$ ./deploy/aws/ssh.sh core '... docker compose ps --format "{{.Service}} {{.Image}} {{.Status}}"'
+caddy caddy:2.8-alpine Up 14 hours
+db postgres:16-alpine Up About a minute (healthy)
+scheduler ghcr.io/th-anwr/mcpkg:v0.1.4 Up About a minute
+web ghcr.io/th-anwr/mcpkg:v0.1.4 Up About a minute (healthy)
+worker-light ghcr.io/th-anwr/mcpkg:v0.1.4 Up About a minute
+$ curl -fsS http://23.23.102.237/healthz
+ok
+```
+
+The deploy restarted the database container, which came back healthy.
+
+### Jobs the full disk killed (N28), re-queued
+
+The UPDATE under N28 would fail on the `jobs_one_active` unique index wherever a tool already has a queued or running job for that stage. So the revival takes the newest dead job per tool and stage, and skips it if a newer job for that tool and stage is active or already done. A first version, with `OR` inside `NOT EXISTS`, ran for over two minutes on the t4g.small (there is no index on `tool_id`) and was cancelled. Rewritten as joins, it finishes in seconds.
+
+Dry run, then the revival:
+
+```
+  stage   | dead_infra | revivable | tools
+----------+------------+-----------+-------
+ security |       9484 |      8052 |  9484
+ smoke    |       1278 |      1278 |  1278
+
+  stage   | revived
+----------+---------
+ security |    8052
+ smoke    |    1278
+```
+
+The 1,432 skipped security jobs already have a newer job. Only 13 other dead jobs remain: 8 archives over the extraction limits, 2 killed `git clone` runs, and 3 health jobs (N31).
+
+N26 failures queued for a new smoke test:
+
+```
+$ sudo /opt/mcpkg/scripts/mcpkg.sh enqueue -stage smoke -smoke-status install_failed
+level=INFO msg=enqueued stage=smoke matched=528 new_jobs=173
+```
+
+Queue afterwards: security 149,523 queued, smoke 27,548, health 4,552.
+
+### N29 on the core
+
+In the 30 minutes after the deploy, the light worker logged 128 lines. All were INFO, and none was an empty-response error. That's a small sample; check again after a day.
+
+### N30 (High, open): spot launches refused
+
+```
+$ ./deploy/aws/launch.sh worker
+==> launching worker (c7a.xlarge, amd64) in us-east-1
+aws: [ERROR]: An error occurred (MaxSpotInstanceCountExceeded) when calling the RunInstances operation: Max spot instance count exceeded
+```
+
+Both launches failed the same way, though nothing else is using the quota:
+
+```
+All Standard (A, C, D, H, I, M, R, T, Z) Spot Instance Requests     8.0  (AWS default 5.0)
+Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances   8.0
+open or active spot requests: none
+running instances: the core only (t4g.small, on-demand)
+```
+
+A c7a.xlarge needs 4 vCPUs, so two fit the quota, and spot worked on 2026-11-11. Most likely AWS has enforced a lower limit since it reinstated the account. At 11:00 UTC, 16 spot vCPUs were requested through Service Quotas (status PENDING).
+
+Until a worker runs, security and smoke make no progress. Fallback, if the user agrees: one on-demand c7a.xlarge at $0.2053 an hour, about $4.93 a day. Only one fits next to the core under the 8-vCPU on-demand quota.
+
+### N31 (Low, open): a NUL byte kills a health job
+
+```
+health | 3 | pq: invalid byte sequence for encoding "UTF8": 0x00 (22021)
+```
+
+Postgres text and JSON values can't hold a NUL character. Some fetched metadata contains one, so the save fails and the job dies after 3 attempts. Fix: strip NUL bytes from fetched strings before saving.
+
+### N32 (Low, open): the deploy uploads local files that are not in the repo
+
+`push.sh` tars the whole checkout except `.env`, `.git`, `bin` and `backups`. That also sends git-excluded local folders to `/opt/mcpkg` on the box: `ops/` (private notes, about 1.2 MB) and `.wt/` (a worktree, about 1 MB). Nothing runs them, but private notes shouldn't sit on the server. Fix: upload `git archive "$GATE_SHA"` (the gate already requires a clean checkout at that commit), and remove the stray folders from the box.
