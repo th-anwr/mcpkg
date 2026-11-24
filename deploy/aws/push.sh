@@ -52,8 +52,16 @@ case "$ROLE" in
 esac
 
 log "uploading code to $HOST:/opt/mcpkg"
-tar --exclude=./.env --exclude=./.git --exclude=./bin --exclude=./backups -czf - . \
-  | ssh "${SSH_OPTS[@]}" "ubuntu@$HOST" 'sudo mkdir -p /opt/mcpkg && sudo tar -xzf - -C /opt/mcpkg'
+if git rev-parse --git-dir >/dev/null 2>&1; then
+  # Tracked files plus new files git does not ignore. Ignored and git-excluded
+  # local files (.env, bin/, backups/, private notes in ops/, worktrees in .wt/)
+  # stay on this machine (N32). --ignore-failed-read skips tracked files that
+  # were deleted but not committed (only possible with GATE_OVERRIDE).
+  pack() { git ls-files -z --cached --others --exclude-standard | tar --null -T - --ignore-failed-read -czf -; }
+else
+  pack() { tar --exclude=./.env --exclude=./.git --exclude=./bin --exclude=./backups -czf - .; }
+fi
+pack | ssh "${SSH_OPTS[@]}" "ubuntu@$HOST" 'sudo mkdir -p /opt/mcpkg && sudo tar -xzf - -C /opt/mcpkg'
 scp "${SSH_OPTS[@]}" -q "$ENV_TMP" "ubuntu@$HOST:/tmp/mcpkg.env"
 ssh "${SSH_OPTS[@]}" "ubuntu@$HOST" 'sudo install -m 600 /tmp/mcpkg.env /opt/mcpkg/.env && rm -f /tmp/mcpkg.env'
 

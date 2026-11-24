@@ -2,6 +2,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -174,7 +175,7 @@ func (s *Store) UpdateFields(ctx context.Context, ex execer, id int64, fields ma
 		ph := fmt.Sprintf("$%d", i+1)
 		switch {
 		case jsonCols[k]:
-			b, err := json.Marshal(v)
+			b, err := marshalJSONB(v)
 			if err != nil {
 				return err
 			}
@@ -182,10 +183,11 @@ func (s *Store) UpdateFields(ctx context.Context, ex execer, id int64, fields ma
 			ph += "::jsonb"
 		case k == "categories":
 			if ss, ok := v.([]string); ok {
-				if ss == nil {
-					ss = []string{}
-				}
-				v = pq.Array(ss)
+				v = pq.Array(cleanTexts(ss))
+			}
+		default:
+			if s, ok := v.(string); ok {
+				v = cleanText(s)
 			}
 		}
 		sets = append(sets, k+"="+ph)
@@ -203,6 +205,64 @@ func (s *Store) UpdateFields(ctx context.Context, ex execer, id int64, fields ma
 
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// Postgres text values can't hold NUL bytes or invalid UTF-8, and jsonb can't
+// hold \u0000. Fetched text sometimes has them (a few READMEs on GitHub
+// contain NUL bytes), and one such value made the whole save fail, so the job
+// died after its retries (N31). These helpers drop NULs and replace invalid
+// UTF-8 before anything is saved.
+
+func cleanText(s string) string {
+	if strings.IndexByte(s, 0) >= 0 {
+		s = strings.ReplaceAll(s, "\x00", "")
+	}
+	return strings.ToValidUTF8(s, "�")
+}
+
+// cleanTexts returns a cleaned copy; never nil, so it saves as an empty array.
+func cleanTexts(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = cleanText(s)
+	}
+	return out
+}
+
+// marshalJSONB marshals v for a jsonb column. json.Marshal already replaces
+// invalid UTF-8; NUL characters, written as \u0000, are dropped here.
+func marshalJSONB(v any) ([]byte, error) {
+	b, err := json.Marshal(v)
+	if err != nil || !bytes.Contains(b, []byte(`\u0000`)) {
+		return b, err
+	}
+	// The match may be an escaped backslash followed by "u0000", which is
+	// fine as it is, so decode and drop only real NUL characters.
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var generic any
+	if err := dec.Decode(&generic); err != nil {
+		return nil, err
+	}
+	return json.Marshal(dropNUL(generic))
+}
+
+func dropNUL(v any) any {
+	switch x := v.(type) {
+	case string:
+		return strings.ReplaceAll(x, "\x00", "")
+	case []any:
+		for i := range x {
+			x[i] = dropNUL(x[i])
+		}
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[strings.ReplaceAll(k, "\x00", "")] = dropNUL(e)
+		}
+		return out
+	}
+	return v
 }
 
 // StageRecord is what a pipeline stage persists.
@@ -230,18 +290,14 @@ func (s *Store) SaveStage(ctx context.Context, r StageRecord) error {
 	}
 	var res any
 	if r.Result != nil {
-		b, err := json.Marshal(r.Result)
+		b, err := marshalJSONB(r.Result)
 		if err != nil {
 			return err
 		}
 		res = string(b)
 	}
-	notes := r.Notes
-	if notes == nil {
-		notes = []string{}
-	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO check_runs (tool_id, stage, decision, notes, result, duration_ms, worker)
-		VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)`, r.ToolID, r.Stage, r.Decision, pq.Array(notes), res, r.DurationMs, r.Worker); err != nil {
+		VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)`, r.ToolID, r.Stage, r.Decision, pq.Array(cleanTexts(r.Notes)), res, r.DurationMs, r.Worker); err != nil {
 		s.warn("save_stage.check_runs", err)
 		return err
 	}
