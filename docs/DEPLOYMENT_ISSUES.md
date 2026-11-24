@@ -14,6 +14,7 @@ No secrets, account IDs or private keys belong in this file: the repository is p
 | 2026-11-11 12:32 | `v0.1.3` (`19fd7b8`) | core and the worker, in parallel | Windows 11, Git Bash | Up. Fixes N25, verified in production (see below). 355 `install_failed` tools queued for a new smoke test. |
 | 2026-11-23 20:53 | `v0.1.3`, restored from snapshot | core only; no workers yet | Windows 11, Git Bash | Up. AWS had suspended the account (identity verification) and terminated both boxes; the core was relaunched from AWS's snapshot of its disk. See "Account suspension and restore". |
 | 2026-11-24 10:53 | `v0.1.4` (`8c7ae64`) | core only; spot workers refused (N30) | Windows 11, Git Bash | Core up. Ships N26, N28 and N29. 9,330 jobs the full disk killed re-queued, plus 173 more `install_failed` smoke tests. No workers, so security and smoke are paused. See "`v0.1.4` deploy". |
+| 2026-11-24 12:40 | `v0.1.5` (`5de9310`) | core only; still no workers (N30) | Windows 11, Git Bash | Up. Fixes N31 and N32, both verified in production. Database container untouched. See "`v0.1.5` deploy". |
 
 Site: `http://23.23.102.237` (plain HTTP, no domain yet). Checks after each deploy:
 
@@ -36,8 +37,8 @@ ok
 | N28 | **High** | Worker disk fills with pulled OCI images; a full disk then kills thousands of jobs | Fixed in `v0.1.4`; 9,330 killed jobs re-queued; to verify on the first worker |
 | N29 | Low | GitHub GraphQL sometimes returns an empty success response; all 25 tools in that batch fail once | Fixed in `v0.1.4`, live on the core: no empty-response errors in its first 30 minutes |
 | N30 | **High** | Spot launches refused (`MaxSpotInstanceCountExceeded`) although the spot quota is 8 vCPUs, so there are no workers | **Open**: increase to 16 vCPUs requested 2026-11-24 11:00 UTC |
-| N31 | Low | A health job dies when fetched text contains a NUL byte, which Postgres rejects | Fixed in code (`5de9310`), CI green; needs a release |
-| N32 | Low | `push.sh` uploads untracked and git-excluded local folders (`ops/`, `.wt/`) to the box | Fixed in `5de9310`, CI green; stray copies removed from the core box |
+| N31 | Low | A health job dies when fetched text contains a NUL byte, which Postgres rejects | Fixed in `v0.1.5`, verified in production: all 3 READMEs saved |
+| N32 | Low | `push.sh` uploads untracked and git-excluded local folders (`ops/`, `.wt/`) to the box | Fixed in `v0.1.5`, verified in production: no stray copies after the deploy |
 | N21 | Medium | Deploy gate skipped its checkout checks on Windows | Fixed in `879312b` |
 | N15 | Medium | Git Bash rewrote AWS parameter names | Fixed in `879312b` |
 | N16 | Medium | SSH key saved with Windows line endings | Fixed in `8aba0db` |
@@ -636,3 +637,29 @@ SAM-protocol/SAM-Protocol          README.md 6770 bytes, 1070 NUL bytes
 `push.sh` tarred the whole checkout except `.env`, `.git`, `bin` and `backups`. That also sent git-excluded local folders to `/opt/mcpkg` on the box: `ops/` (private notes, 16 files, the newest uploaded with `v0.1.4`) and `.wt/` (a worktree from 2026-11-11, 135 files). Nothing on the box used them.
 
 **Fix (`5de9310`):** `push.sh` now uploads what `git ls-files --cached --others --exclude-standard` lists: tracked files plus new files git does not ignore. Anything ignored or git-excluded stays local. Outside a git checkout it falls back to the old tar. Checked locally: the archive holds the 138 tracked files plus the new test, none of `ops/`, `.wt/`, `.env`, `bin/`, `backups/` or `logs/`, and the scripts keep their executable bit. The stray `ops/` and `.wt/` copies were removed from the core box on 2026-11-24. The fix applies to deploys run from a checkout that contains it, so `v0.1.4` checkouts still use the old upload.
+
+## `v0.1.5` deploy: N31 and N32 verified (2026-11-24 12:40 UTC)
+
+Release `v0.1.5` on `5de9310`. The core runs it, and this deploy left the database container running. The new upload carried no `ops/` or `.wt/` (N32):
+
+```
+scheduler ghcr.io/th-anwr/mcpkg:v0.1.5 Up 15 seconds
+web ghcr.io/th-anwr/mcpkg:v0.1.5 Up 16 seconds (healthy)
+worker-light ghcr.io/th-anwr/mcpkg:v0.1.5 Up 16 seconds
+$ ls -A /opt/mcpkg | grep -cE '^(ops|\.wt)$'
+0
+```
+
+The 3 health jobs that died on NUL bytes (N31) were re-queued and finished within a minute. The READMEs saved without their NUL bytes, and the tools moved on to security:
+
+```
+   id   |               name                | readme_chars | has_fffd | last_health | security_queued
+--------+-----------------------------------+--------------+----------+-------------+-----------------
+  34229 | srimanikantaBattu/livekit-backend |         7163 | f        | continue    |               1
+ 129420 | karlesmarin/synapse-protocol      |         1323 | f        | continue    |               1
+ 133772 | SAM-protocol/SAM-Protocol         |         5676 | f        | continue    |               1
+
+ dead_health
+-------------
+           0
+```
