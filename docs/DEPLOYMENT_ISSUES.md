@@ -36,8 +36,8 @@ ok
 | N28 | **High** | Worker disk fills with pulled OCI images; a full disk then kills thousands of jobs | Fixed in `v0.1.4`; 9,330 killed jobs re-queued; to verify on the first worker |
 | N29 | Low | GitHub GraphQL sometimes returns an empty success response; all 25 tools in that batch fail once | Fixed in `v0.1.4`, live on the core: no empty-response errors in its first 30 minutes |
 | N30 | **High** | Spot launches refused (`MaxSpotInstanceCountExceeded`) although the spot quota is 8 vCPUs, so there are no workers | **Open**: increase to 16 vCPUs requested 2026-11-24 11:00 UTC |
-| N31 | Low | A health job dies when fetched text contains a NUL byte, which Postgres rejects | **Open**: 3 jobs |
-| N32 | Low | `push.sh` uploads untracked and git-excluded local folders (`ops/`, `.wt/`) to the box | **Open** |
+| N31 | Low | A health job dies when fetched text contains a NUL byte, which Postgres rejects | Fixed in code (`5de9310`), CI green; needs a release |
+| N32 | Low | `push.sh` uploads untracked and git-excluded local folders (`ops/`, `.wt/`) to the box | Fixed in `5de9310`, CI green; stray copies removed from the core box |
 | N21 | Medium | Deploy gate skipped its checkout checks on Windows | Fixed in `879312b` |
 | N15 | Medium | Git Bash rewrote AWS parameter names | Fixed in `879312b` |
 | N16 | Medium | SSH key saved with Windows line endings | Fixed in `8aba0db` |
@@ -615,14 +615,24 @@ A c7a.xlarge needs 4 vCPUs, so two fit the quota, and spot worked on 2026-11-11.
 
 Until a worker runs, security and smoke make no progress. Fallback, if the user agrees: one on-demand c7a.xlarge at $0.2053 an hour, about $4.93 a day. Only one fits next to the core under the 8-vCPU on-demand quota.
 
-### N31 (Low, open): a NUL byte kills a health job
+### N31 (Low): a NUL byte kills a health job
 
 ```
 health | 3 | pq: invalid byte sequence for encoding "UTF8": 0x00 (22021)
 ```
 
-Postgres text and JSON values can't hold a NUL character. Some fetched metadata contains one, so the save fails and the job dies after 3 attempts. Fix: strip NUL bytes from fetched strings before saving.
+Postgres text values can't hold a NUL byte, and jsonb can't hold `\u0000`. When a fetched value contains one, the whole save fails and the job dies after 3 attempts. All three failing tools have a README with raw NUL bytes on GitHub; they are not UTF-16, just stray bytes:
 
-### N32 (Low, open): the deploy uploads local files that are not in the repo
+```
+srimanikantaBattu/livekit-backend  README.md 7185 bytes, 19 NUL bytes
+karlesmarin/synapse-protocol       README.md 1398 bytes, 40 NUL bytes
+SAM-protocol/SAM-Protocol          README.md 6770 bytes, 1070 NUL bytes
+```
 
-`push.sh` tars the whole checkout except `.env`, `.git`, `bin` and `backups`. That also sends git-excluded local folders to `/opt/mcpkg` on the box: `ops/` (private notes, about 1.2 MB) and `.wt/` (a worktree, about 1 MB). Nothing runs them, but private notes shouldn't sit on the server. Fix: upload `git archive "$GATE_SHA"` (the gate already requires a clean checkout at that commit), and remove the stray folders from the box.
+**Fix (`5de9310`):** `store.UpdateFields` and `store.SaveStage`, which every stage saves through, now drop NUL bytes and replace invalid UTF-8 in text values and arrays. In JSON values they drop real NUL characters but keep an escaped literal `\u0000`. Large numbers stay exact. `TestSaveStageCleansText` saves a README, a description, categories, notes and a JSON result containing NUL bytes and invalid UTF-8 into Postgres. Takes effect with the next release; then re-queue the 3 dead health jobs.
+
+### N32 (Low): the deploy uploads local files that are not in the repo
+
+`push.sh` tarred the whole checkout except `.env`, `.git`, `bin` and `backups`. That also sent git-excluded local folders to `/opt/mcpkg` on the box: `ops/` (private notes, 16 files, the newest uploaded with `v0.1.4`) and `.wt/` (a worktree from 2026-11-11, 135 files). Nothing on the box used them.
+
+**Fix (`5de9310`):** `push.sh` now uploads what `git ls-files --cached --others --exclude-standard` lists: tracked files plus new files git does not ignore. Anything ignored or git-excluded stays local. Outside a git checkout it falls back to the old tar. Checked locally: the archive holds the 138 tracked files plus the new test, none of `ops/`, `.wt/`, `.env`, `bin/`, `backups/` or `logs/`, and the scripts keep their executable bit. The stray `ops/` and `.wt/` copies were removed from the core box on 2026-11-24. The fix applies to deploys run from a checkout that contains it, so `v0.1.4` checkouts still use the old upload.
